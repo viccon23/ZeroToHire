@@ -1,0 +1,278 @@
+.code-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #1e1e1e;
+}
+
+.editor-header {
+  padding: 1rem;
+  background-color: #2d2d30;
+  border-bottom: 1px solid #3e3e42;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.editor-header h2 {
+  margin: 0;
+  color: #cccccc;
+  font-size: 1.2rem;
+}
+
+.editor-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.evaluate-button {
+  background-color: #0e639c;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+  font-weight: 500;
+}
+
+.evaluate-button:hover:not(:disabled) {
+  background-color: #1177bb;
+}
+
+.evaluate-button:disabled {
+  background-color: #555;
+  cursor: not-allowed;
+}
+
+.problem-display {
+  background-color: #252526;
+  border-bottom: 1px solid #3e3e42;
+  overflow-y: auto;
+  min-height: 150px;
+  max-height: 500px;
+}
+
+.problem-info {
+  padding: 1rem;
+}
+
+.problem-info h3 {
+  color: #cccccc;
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+.problem-description {
+  color: #d4d4d4;
+}
+
+.problem-description details {
+  margin-top: 0.5rem;
+}
+
+.problem-description summary {
+  cursor: pointer;
+  color: #4fc3f7;
+  font-weight: 500;
+  padding: 0.25rem 0;
+}
+
+.problem-description summary:hover {
+  color: #81d4fa;
+}
+
+.description-content {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background-color: #1e1e1e;
+  border-radius: 4px;
+  border-left: 3px solid #4fc3f7;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+}
+
+.description-content.expanded {
+  height: calc(100% - 60px);
+  overflow-y: auto;
+}
+
+/* Markdown styling for problem descriptions */
+.description-content h1,
+.description-content h2,
+.description-content h3,
+.description-content h4,
+.description-content h5,
+.description-content h6 {
+  color: #4fc3f7;
+  margin: 1rem 0 0.5rem 0;
+}
+
+.description-content p {
+  margin: 0.5rem 0;
+  color: #d4d4d4;
+}
+
+.description-content strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.description-content em {
+  color: #81d4fa;
+  font-style: italic;
+}
+
+.description-content code {
+  background-color: #2d2d30;
+  color: #ce9178;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+.description-content pre {
+  background-color: #2d2d30;
+  border: 1px solid #3e3e42;
+  border-radius: 4px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.description-content pre code {
+  background-color: transparent;
+  padding: 0;
+  color: #d4d4d4;
+}
+
+.description-content ul,
+.description-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+  color: #d4d4d4;
+}
+
+.description-content li {
+  margin: 0.25rem 0;
+}
+
+.description-content blockquote {
+  border-left: 3px solid #4fc3f7;
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  color: #b3b3b3;
+  font-style: italic;
+}
+
+/* Resize handle styles */
+.resize-handle {
+  height: 8px;
+  background-color: #3e3e42;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid #555;
+  border-bottom: 1px solid #555;
+  position: relative;
+  user-select: none;
+}
+
+.resize-handle:hover {
+  background-color: #4fc3f7;
+}
+
+.resize-handle.resizing {
+  background-color: #4fc3f7;
+}
+
+.resize-indicator {
+  color: #888;
+  font-size: 12px;
+  letter-spacing: 2px;
+  pointer-events: none;
+}
+
+.resize-handle:hover .resize-indicator {
+  color: #fff;
+}
+
+.description-content p {
+  margin: 0.5rem 0;
+  color: #d4d4d4;
+}
+
+.no-problem {
+  padding: 1rem;
+  text-align: center;
+  color: #888;
+}
+
+.editor-container {
+  flex: 1;
+  min-height: 0; /* Important for proper flex behavior */
+}
+
+.editor-footer {
+  background-color: #2d2d30;
+  border-top: 1px solid #3e3e42;
+  padding: 0.75rem 1rem;
+}
+
+.editor-tips {
+  color: #cccccc;
+  font-size: 0.85rem;
+}
+
+.editor-tips span {
+  font-weight: 600;
+  color: #4fc3f7;
+}
+
+.editor-tips ul {
+  margin: 0.5rem 0 0 1rem;
+  padding: 0;
+}
+
+.editor-tips li {
+  margin: 0.25rem 0;
+  color: #d4d4d4;
+}
+
+/* Scrollbar styling for problem description */
+.problem-display::-webkit-scrollbar {
+  width: 6px;
+}
+
+.problem-display::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.problem-display::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 3px;
+}
+
+.problem-display::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .editor-header {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
+  
+  .problem-display {
+    max-height: 150px;
+  }
+  
+  .editor-tips {
+    font-size: 0.8rem;
+  }
+}
