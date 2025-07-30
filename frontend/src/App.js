@@ -8,7 +8,6 @@ function App() {
   const [conversation, setConversation] = useState([]);
   const [currentProblem, setCurrentProblem] = useState(null);
   const [code, setCode] = useState('# Write your solution here\ndef solution():\n    pass');
-  const [functionSignature, setFunctionSignature] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   // Load initial status when app starts
@@ -28,6 +27,12 @@ function App() {
 
   const sendMessage = async (message) => {
     if (!message.trim()) return;
+    const userMessage = { 
+      role: 'user', 
+      content: message, 
+      timestamp: new Date().toISOString() 
+    };
+    setConversation(prev => [...prev, userMessage]);
 
     setIsLoading(true);
     try {
@@ -37,16 +42,14 @@ function App() {
       // Check if the problem changed during chat
       if (response.data.problem_changed) {
         setCurrentProblem(response.data.current_problem);
-        setFunctionSignature(response.data.function_signature || '');
-        setCode(''); // Clear code so function signature can be used as default
+        setCode('# Write your solution here\ndef solution():\n    pass'); // Reset to default code
       } else {
         setCurrentProblem(response.data.current_problem);
       }
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Add error message to conversation
+      // Add error message to conversation (user message is already there)
       setConversation(prev => [...prev, 
-        { role: 'user', content: message, timestamp: new Date().toISOString() },
         { role: 'error', content: 'Failed to get response from tutor. Please try again.', timestamp: new Date().toISOString() }
       ]);
     } finally {
@@ -57,11 +60,12 @@ function App() {
   const startNewProblem = async () => {
     setIsLoading(true);
     try {
-      const response = await api.post('/new-problem');
+      const response = await api.post('/new-problem', {});
       setConversation(response.data.conversation_history || []);
       setCurrentProblem(response.data.problem);
-      setFunctionSignature(response.data.function_signature || '');
-      setCode(''); // Clear code so function signature can be used as default
+      
+      // Reset to clean code editor
+      setCode('# Write your solution here\ndef solution():\n    pass');
     } catch (error) {
       console.error('Failed to start new problem:', error);
     } finally {
@@ -89,10 +93,9 @@ function App() {
   const clearSession = async () => {
     setIsLoading(true);
     try {
-      await api.post('/clear-session');
+      await api.post('/clear-session', {});
       setConversation([]);
       setCurrentProblem(null);
-      setFunctionSignature('');
       setCode('# Write your solution here\ndef solution():\n    pass');
     } catch (error) {
       console.error('Failed to clear session:', error);
@@ -132,7 +135,6 @@ function App() {
             onEvaluate={evaluateCode}
             isLoading={isLoading}
             currentProblem={currentProblem}
-            functionSignature={functionSignature}
           />
         </div>
       </main>

@@ -3,8 +3,8 @@ import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import './CodeEditor.css';
 
-const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem, functionSignature }) => {
-  const [problemHeight, setProblemHeight] = useState(200); // Default height in pixels
+const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem }) => {
+  const [problemHeight, setProblemHeight] = useState(200);
   const [isResizing, setIsResizing] = useState(false);
 
   const handleEditorChange = (value) => {
@@ -55,9 +55,6 @@ const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem,
     }
   }, [isResizing]);
 
-  // If we have a function signature and the code is empty, use it as default
-  const editorValue = code || (functionSignature ? `${functionSignature}\n        # Your solution here\n        pass` : '');
-
   return (
     <div className="code-editor">
       <div className="editor-header">
@@ -68,8 +65,11 @@ const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem,
             disabled={!code.trim() || isLoading}
             className="evaluate-button"
           >
-            {isLoading ? '⏳ Evaluating...' : '🚀 Submit Code'}
+            {isLoading ? '⏳ Getting Feedback...' : '� Get Code Review'}
           </button>
+          <span className="submit-explanation">
+            This sends your code to the AI tutor for analysis and feedback
+          </span>
         </div>
       </div>
       
@@ -103,7 +103,7 @@ const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem,
         <Editor
           height="100%"
           defaultLanguage="python"
-          value={editorValue}
+          value={code}
           onChange={handleEditorChange}
           theme="vs-dark"
           options={{
@@ -129,9 +129,9 @@ const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem,
         <div className="editor-tips">
           <span>💡 Tips:</span>
           <ul>
-            <li>Write your solution and click "Submit Code" to get feedback</li>
-            <li>The AI tutor can see your code and provide specific guidance</li>
-            <li>Don't worry about getting it perfect - learning is iterative!</li>
+            <li>Write your solution and click "Get Code Review" for AI tutor feedback</li>
+            <li>The code editor is for organized coding - you can also discuss code in chat</li>
+            <li>Start with just the basic structure, then iterate based on feedback</li>
           </ul>
         </div>
       </div>
