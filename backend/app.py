@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime
 import random
+import re
 
 # Backend for AI Coding Tutor using Llama model
 # This code provides a Flask API for an AI coding tutor that helps users with coding problems.
@@ -84,28 +85,26 @@ class CodingTutor:
         })
         
         # Check if this is the first problem or a new problem in an existing session
-        has_previous_conversation = len([msg for msg in self.conversation_history if msg['role'] in ['user', 'assistant']]) > 0
+        has_previous_conversation = len([msg for msg in self.conversation_history if msg['role'] in ['user', 'assistant', 'tutor']]) > 0
         
         if has_previous_conversation:
             # Continuing session with new problem
-            intro_prompt = f"""You are Alex, a coding tutor. The student wants to work on: {problem_title}
-
-            Be a Socratic tutor - guide through questions, don't give away answers.
-
-            Respond as Alex: "Great! Let's work on {problem_title}. I can see you have the problem description. Before we dive into coding, let's make sure we understand what we're being asked to do. Can you tell me in your own words what this problem is asking for?"
-
-            Alex:"""
+            tutor_response = f"Great! Let's work on '{problem_title}'. I can see you have the problem description. Before we dive into coding, let's make sure we understand what we're being asked to do. Can you tell me in your own words what this problem is asking for? Let me know if you have any questions!"
         else:
             # First problem in session
-            intro_prompt = f"""You are Alex, a coding tutor starting a session. The student's first problem is: {problem_title}
-
-            Be a Socratic tutor - guide through questions, don't give away answers.
-
-            Respond as Alex: "Hello! I'm Alex, your coding tutor. I see you're working on {problem_title}. Before we start coding, let's make sure we understand the problem. Can you read through the problem description and tell me what you think it's asking us to do?"
-
-            Alex:"""
+            tutor_response = f"Hello! I'm Alex, your coding tutor. I see you're working on '{problem_title}'. Before we start coding, let's make sure we understand the problem. Can you read through the problem description and tell me what you think it's asking us to do? Let me know if you have any questions!"
         
-        return self.chat(intro_prompt, is_initial=True)
+        # Add the tutor response directly to history instead of generating it
+        self.conversation_history.append({
+            'role': 'tutor',
+            'content': tutor_response,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # Save session after adding the response
+        self.save_session()
+        
+        return tutor_response
     
     def chat(self, user_message, is_initial=False):
         """Continue the conversation with the tutor"""
@@ -123,16 +122,32 @@ class CodingTutor:
         # Generate response
         response = self.llm(
             conversation_context,
-            max_tokens=800,
+            max_tokens=1500,
             temperature=0.7,
             top_p=0.9,
             echo=False,
-            stop=["Human:", "User:", "Student:", "Alex:"]
+            stop=["</response>", "Student:", "User:"]
         )
         
         # Extract response text and clean it up
-        tutor_response = response['choices'][0]['text'].strip()
+        raw_response = response['choices'][0]['text'].strip()
         
+        # Extract thought and response
+        thought = ""
+        tutor_response = ""
+        if "<response>" in raw_response:
+            thought_match = re.search(r'(.*)<response>', raw_response, re.DOTALL)
+            if thought_match:
+                thought = thought_match.group(1).strip()
+            
+            response_match = re.search(r'<response>(.*)', raw_response, re.DOTALL)
+            if response_match:
+                tutor_response = response_match.group(1).strip()
+        else:
+            tutor_response = raw_response
+
+        print(f"LLM Thought: {thought}")
+        tutor_response = self._clean_response(tutor_response)
         
         # Add tutor response to history
         self.conversation_history.append({
@@ -146,6 +161,23 @@ class CodingTutor:
         
         return tutor_response
     
+    def _clean_response(self, response):
+        """Clean up the tutor response to remove stage directions and unwanted patterns"""
+        import re
+        
+        # Remove stage directions in parentheses like "(pauses)", "(thinks)", etc, and common unwanted patterns and phrases.
+        response = re.sub(r'\([^)]*\)', '', response)
+        response = re.sub(r'\*[^*]*\*', '', response)  # Remove *action* text
+        response = re.sub(r'\b(let me think|thinking|pondering|considering)\b', '', response, flags=re.IGNORECASE)
+        
+        # Remove trailing colons that might be conversation artifacts
+        response = re.sub(r':\s*$', '', response)
+        
+        # Clean up extra whitespace and normalize spaces
+        response = ' '.join(response.split())
+        
+        return response.strip()
+    
     
     def _build_conversation_context(self, initial_prompt=None):
         """Build the full conversation context for the model"""
@@ -154,28 +186,48 @@ class CodingTutor:
         
         context_parts = []
         
-        context_parts.append("You are Alex, an expert coding tutor who uses the Socratic method.")
-        context_parts.append("CRITICAL: Stay focused on the current problem. Don't introduce irrelevant topics.")
-        context_parts.append("TUTORING APPROACH:")
-        context_parts.append("- Ask questions to guide student discovery")
-        context_parts.append("- Let students work through problems themselves")
-        context_parts.append("- Give hints only when students are stuck")
-        context_parts.append("- Correct misconceptions with gentle questions")
-        context_parts.append("- Celebrate student insights and progress")
-        context_parts.append("- Keep discussions relevant to the current problem")
-        context_parts.append("NEVER DO:")
-        context_parts.append("- Give away complete algorithms or solutions")
-        context_parts.append("- List out all the steps to solve a problem")
-        context_parts.append("- Introduce tangential topics (like overflow in other languages)")
-        context_parts.append("- Discuss implementation details not relevant to the core problem")
-        context_parts.append("- Provide code unless the student asks for help with syntax")
-        context_parts.append("")
+        # Core Role and Instructions
+        context_parts.append("You are Alex, an expert coding tutor specializing in LeetCode problems, using the Socratic method.")
+        context_parts.append("Your goal is to guide the user to a solution, providing hints and asking questions to foster discovery, but provide the solution with explanation and Python code if they explicitly give up or request it.")
         
+        # LeetCode-Specific Guidance
+        context_parts.append("For LeetCode problems, summarize key constraints (e.g., input size, edge cases) and guide the student to consider time and space complexity.")
+        context_parts.append("Encourage exploration of algorithmic patterns (e.g., two-pointer, dynamic programming, greedy) when relevant.")
+        context_parts.append("If the student submits code, analyze it for correctness, efficiency, and edge cases. Provide specific feedback and suggest improvements without rewriting unless requested.")
+        
+        # Communication Style
+        context_parts.append("COMMUNICATION STYLE:")
+        context_parts.append("- Be direct, honest, and natural. If you don't understand something, ask for clarification.")
+        context_parts.append("- Maintain an encouraging tone, especially when the student is frustrated, and celebrate small wins.")
+        
+        # Tutoring Approach
+        context_parts.append("TUTORING APPROACH:")
+        context_parts.append("- Ask questions to guide student discovery.")
+        context_parts.append("- Let students work through problems themselves, providing hints only when stuck.")
+        context_parts.append("- If the student says 'I can't repeatedly, switch to concrete examples or simpler analogies.")
+        context_parts.append("- If the student provides an incomplete problem description or switches problems, ask clarifying questions to confirm the context.")
+        
+        # Platform Integration
+        context_parts.append("Format code in clear Python code blocks for display in the website's code editor.")
+        context_parts.append("Suggest test cases the student can run to verify their solution.")
+        context_parts.append("When relevant, suggest external resources (e.g., LeetCode problem URL, Python documentation).")
+        
+        # Never Do
+        context_parts.append("NEVER DO:")
+        context_parts.append("- Overuse conceptual questions when the student needs concrete examples.")
+        context_parts.append("- Refuse to help when the student explicitly gives up.")
+        context_parts.append("- Introduce tangential topics unrelated to the current problem.")
+        
+        # Problem and User Context
         if self.current_problem:
             context_parts.append(f"Current Problem: {self.current_problem['title']}")
+            context_parts.append(f"Problem Constraints: {self.current_problem.get('constraints', 'Not specified')}")
+            context_parts.append(f"Difficulty: {self.current_problem.get('difficulty', 'Not specified')}")
             context_parts.append("")
         
-        recent_history = self.conversation_history[-10:]
+        # Conversation History
+        history_limit = 20 if self.current_problem.get('difficulty') == 'hard' else 10
+        recent_history = self.conversation_history[-history_limit:]
         
         for msg in recent_history:
             if msg['role'] == 'user':
@@ -184,7 +236,7 @@ class CodingTutor:
                 context_parts.append(f"Alex: {msg['content']}")
         
         context_parts.append("")
-        context_parts.append("Alex:")
+        context_parts.append("<thought>")
         
         return "\n".join(context_parts)
     
