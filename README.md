@@ -1,6 +1,8 @@
 # ZeroToHire
 
-ZeroToHire is an AI-powered coding tutor that provides an interactive way to practice LeetCode problems. Built with React and Flask, it uses a local Llama model specialized in coding to guide users through programming challenges step-by-step.
+ZeroToHire is an AI-powered coding tutor that provides an interactive way to practice LeetCode problems. Built with React and Flask, it uses a local huggingface model to guide users through programming challenges step-by-step.
+
+I was inspired after watching Neetcode videos and thinking of how convenient it would be to have someone to guide me in the right direction to a solution when solving leetcode problems of my own.
 
 (This project is still under development. I have more features and things to tweak to have the LLM act more human-like, and to make the frontend and backend a more smooth experience. Just a heads up!)
 
@@ -14,7 +16,6 @@ ZeroToHire is an AI-powered coding tutor that provides an interactive way to pra
 
 ### Smart Problem Management  
 - **LeetCode Integration**: Curated dataset of real LeetCode problems
-- **Function Signatures**: Automatically generates proper class Solution templates
 - **Problem Filtering**: Search by data structures (arrays, trees, linked lists) or algorithms (dynamic programming, sorting, etc.)
 - **Session Persistence**: Your conversation history and progress are saved
 
@@ -36,12 +37,11 @@ ZeroToHire is an AI-powered coding tutor that provides an interactive way to pra
 - **Flask** - Python web framework with RESTful API
 - **llama-cpp-python** - Local AI model inference with GPU acceleration
 - **PyTorch CUDA** - GPU acceleration for faster response times
-- **Hugging Face Dataset** - [LeetCode problem database](https://huggingface.co/datasets/greengerong/leetcode) A big thank you to greengerong for making this dataset and saving me from spending hours of making my own.
-
+- **Hugging Face Dataset** - [LeetCode problem database](https://huggingface.co/datasets/greengerong/leetcode) A big thank you to greengerong for making this dataset. I modified it by adding an extra section for problem types, so while the dataset used in the code is different, this is the base dataset that gives almost everything.
 ### AI Model
-- **WizardCoder-Python-13B** - Specialized coding language model
+- **Qwen/Qwen2.5-Coder-7B-Instruct-GGUF** - Specialized coding language model
 - **Custom Prompt Engineering** - Tuned for patient, step-by-step tutoring
-- **GPU Optimization** - This was configured for my local GPU, a 4070Ti, so please have this in consideration if you plan to clone and use. A more simpler model (7B) might be needed for less intense GPUs.
+- **GPU Optimization** - This was configured for my local GPU, a 4070Ti, so please have this in consideration if you intend to clone and try out.
 
 ## 🎯 How It Works
 

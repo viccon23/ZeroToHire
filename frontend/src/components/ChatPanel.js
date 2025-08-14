@@ -56,7 +56,6 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading }) =
   return (
     <div className="chat-panel">
       <div className="chat-header">
-        <h2>💬 Conversation</h2>
         {currentProblem && (
           <div className="current-problem">
             <strong>Current Problem:</strong> {currentProblem.title}
