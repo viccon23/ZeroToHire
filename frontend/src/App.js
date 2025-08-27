@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import ChatPanel from './components/ChatPanel';
 import CodeEditor from './components/CodeEditor';
+import ProblemBrowser from './components/ProblemBrowser';
 import api from './services/api';
 
 function App() {
@@ -9,6 +10,7 @@ function App() {
   const [currentProblem, setCurrentProblem] = useState(null);
   const [code, setCode] = useState('# Write your solution here\ndef solution():\n    pass');
   const [isLoading, setIsLoading] = useState(false);
+  const [showProblemBrowser, setShowProblemBrowser] = useState(false);
 
   // Load initial status when app starts
   useEffect(() => {
@@ -57,20 +59,25 @@ function App() {
     }
   };
 
-  const startNewProblem = async () => {
+  const selectProblem = async (problemId) => {
     setIsLoading(true);
     try {
-      const response = await api.post('/new-problem', {});
+      const response = await api.post(`/problems/${problemId}`, {});
       setConversation(response.data.conversation_history || []);
       setCurrentProblem(response.data.problem);
+      setShowProblemBrowser(false);
       
       // Reset to clean code editor
       setCode('# Write your solution here\ndef solution():\n    pass');
     } catch (error) {
-      console.error('Failed to start new problem:', error);
+      console.error('Failed to select problem:', error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const startNewProblem = async () => {
+    setShowProblemBrowser(true);
   };
 
   const evaluateCode = async () => {
@@ -110,7 +117,7 @@ function App() {
         <h1>ZeroToHire</h1>
         <div className="header-buttons">
           <button onClick={startNewProblem} disabled={isLoading}>
-            New Problem
+            Browse Problems
           </button>
           <button onClick={clearSession} disabled={isLoading}>
             Clear Session
@@ -138,6 +145,14 @@ function App() {
           />
         </div>
       </main>
+      
+      {showProblemBrowser && (
+        <ProblemBrowser
+          onSelectProblem={selectProblem}
+          onClose={() => setShowProblemBrowser(false)}
+          isLoading={isLoading}
+        />
+      )}
     </div>
   );
 }

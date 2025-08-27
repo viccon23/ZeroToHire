@@ -1,13 +1,12 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from datasets import load_dataset, Dataset
+from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 import torch
 from llama_cpp import Llama
 import json
 import os
 from datetime import datetime
-import random
 import re
 
 class CodingTutor:
@@ -65,7 +64,7 @@ class CodingTutor:
             print(f"Could not save session: {e}")
     
     def set_problem(self, problem_title, problem_desc):
-        """Set a new coding problem for tutoring"""
+        """Set a new coding problem"""
         self.current_problem = {
             'title': problem_title,
             'description': problem_desc
@@ -80,36 +79,34 @@ class CodingTutor:
         })
         
         # Check if this is the first problem or a new problem in an existing session
-        has_previous_conversation = len([msg for msg in self.conversation_history if msg['role'] in ['user', 'assistant', 'tutor']]) > 0
+        has_previous_conversation = len([msg for msg in self.conversation_history if msg['role'] in ['user', 'assistant', 'alex']]) > 0
         
         if has_previous_conversation:
             # Continuing session with new problem
-            tutor_response = f"Great! Let's work on '{problem_title}'. I can see you have the problem description. Before we dive into coding, let's make sure we understand what we're being asked to do. Can you tell me in your own words what this problem is asking for? Let me know if you have any questions!"
+            response = f"Great! Let's work on '{problem_title}'. I can see you have the problem description. Before we dive into coding, let's make sure we understand what we're being asked to do. Can you tell me in your own words what this problem is asking for? Let me know if you have any questions!"
         else:
             # First problem in session
-            tutor_response = f"Hello! I'm Alex, your coding tutor. I see you're working on '{problem_title}'. Before we start coding, let's make sure we understand the problem. Can you read through the problem description and tell me what you think it's asking us to do? Let me know if you have any questions!"
+            response = f"Hello! I'm Alex, your coding assistant. I see you're working on '{problem_title}'. Before we start coding, let's make sure we understand the problem. Can you read through the problem description and tell me what you think it's asking us to do? Let me know if you have any questions!"
         
-        # Add the tutor response directly to history instead of generating it
+        # Add the response directly to history instead of generating it
         self.conversation_history.append({
-            'role': 'tutor',
-            'content': tutor_response,
+            'role': 'alex',
+            'content': response,
             'timestamp': datetime.now().isoformat()
         })
         
         # Save session after adding the response
         self.save_session()
         
-        return tutor_response
+        return response
     
     def chat(self, user_message, is_initial=False):
-        """Continue the conversation with the tutor"""
-        # Add user message to history (unless it's the initial problem setup)
-        if not is_initial:
-            self.conversation_history.append({
-                'role': 'user',
-                'content': user_message,
-                'timestamp': datetime.now().isoformat()
-            })
+        """Continue the conversation with Alex"""
+        self.conversation_history.append({
+            'role': 'user',
+            'content': user_message,
+            'timestamp': datetime.now().isoformat()
+        })
         
         # Build the full conversation context
         conversation_context = self._build_conversation_context(user_message if is_initial else None)
@@ -117,39 +114,45 @@ class CodingTutor:
         # Generate response
         response = self.llm(
             conversation_context,
-            max_tokens=1500,
+            max_tokens= 400,
             temperature=0.7,
             top_p=0.9,
             echo=False,
-            stop=["Student:", "User:"]
+            stop=["Student:", "User:", "Alex:", "\n\nAlex:", "\nAlex:"]
         )
         
         # Extract response text and clean it up
         raw_response = response['choices'][0]['text'].strip()
-        # Remove any leaked internal reasoning tags like <thought>...</thought>
+        
+        # Remove any leaked internal reasoning tags
         if '</thought>' in raw_response:
-            # Keep only content after the closing thought tag
             raw_response = raw_response.split('</thought>', 1)[1].strip()
-        # Strip any residual tags
         raw_response = re.sub(r'</?thought>', '', raw_response)
         raw_response = re.sub(r'</?response>', '', raw_response)
-
-        tutor_response = self._clean_response(raw_response)
         
-        # Add tutor response to history
+        # Aggressively stop at any role markers that leaked through
+        role_markers = ['Alex:', 'Student:', 'User:']
+        for marker in role_markers:
+            if marker in raw_response:
+                raw_response = raw_response.split(marker)[0].strip()
+                break
+
+        response = self._clean_response(raw_response)
+        
+        # Add response to history
         self.conversation_history.append({
-            'role': 'tutor',
-            'content': tutor_response,
+            'role': 'alex',
+            'content': response,
             'timestamp': datetime.now().isoformat()
         })
         
         # Save session after each interaction
         self.save_session()
         
-        return tutor_response
+        return response
     
     def _clean_response(self, response):
-        """Clean up the tutor response to remove stage directions and unwanted patterns"""
+        """Clean up the response to remove stage directions and unwanted patterns"""
         import re
         
         # Remove stage directions in parentheses like "(pauses)", "(thinks)", etc, and common unwanted patterns and phrases.
@@ -178,7 +181,8 @@ class CodingTutor:
         context_parts = []
         
         # Core Role and Instructions
-        context_parts.append("You are Alex, an expert coding tutor specializing in LeetCode problems, using the Socratic method.")
+        context_parts.append("You are Alex, an expert coding tutor specializing in LeetCode problems. Your name is Alex.")
+        context_parts.append("The user is the student. Never refer to the user as 'Alex'.")
         context_parts.append("Your goal is to guide the user to a solution, providing hints and asking questions to foster discovery, but provide the solution with explanation and Python code if they explicitly give up or request it.")
         
         # LeetCode-Specific Guidance
@@ -190,30 +194,46 @@ class CodingTutor:
         context_parts.append("COMMUNICATION STYLE:")
         context_parts.append("- Be direct, honest, and natural. If you don't understand something, ask for clarification.")
         context_parts.append("- Maintain an encouraging tone, especially when the student is frustrated, and celebrate small wins.")
+        context_parts.append("- Keep responses concise and focused. Ask ONE clear question at a time rather than multiple questions.")
+        context_parts.append("- Avoid repeating the same question or concept multiple times in one response.")
         
         # Tutoring Approach
         context_parts.append("TUTORING APPROACH:")
         context_parts.append("- Ask questions to guide student discovery.")
         context_parts.append("- Let students work through problems themselves, providing hints only when stuck.")
-        context_parts.append("- If the student says they cannot complete the problem or know the, switch to concrete examples or simpler analogies.")
-        context_parts.append("- If the student provides an incomplete problem description or switches problems, ask clarifying questions to confirm the context.")
+        context_parts.append("- If the student says they cannot complete the problem or gives up, switch to concrete examples or simpler analogies.")
+        context_parts.append("- Stay focused on the current problem. If the student asks about off-topic subjects, briefly acknowledge but guide them back to the current problem.")
+        context_parts.append("- If the student wants to work on a different problem, suggest they use the 'Browse Problems' button to find and select it.")
+        
+        # Staying On Topic
+        context_parts.append("STAYING FOCUSED:")
+        context_parts.append("- Your primary role is to help with the current LeetCode problem.")
+        context_parts.append("- For brief off-topic questions (like simple coding concepts), give a concise answer then redirect to the current problem.")
+        context_parts.append("- If asked about other problems, say something like 'You can use the Browse Problems button to search for that specific problem if you'd like to work on it instead.'")
+        context_parts.append("- Keep the conversation centered on solving the problem at hand.")
         
         # Platform Integration
-        context_parts.append("Format code in clear Python code blocks for display in the website's code editor.")
-        context_parts.append("Suggest test cases the student can run to verify their solution.")
-        context_parts.append("When relevant, suggest external resources (e.g., LeetCode problem URL, Python documentation).")
+        context_parts.append("PLATFORM FEATURES:")
+        context_parts.append("- Format code in clear Python code blocks for display in the website's code editor.")
+        context_parts.append("- Suggest test cases the student can run to verify their solution.")
+        context_parts.append("- The student can use 'Browse Problems' button to search for and select different problems.")
+        context_parts.append("- When relevant, suggest external resources (e.g., LeetCode problem URL, Python documentation).")
         
         # Never Do
         context_parts.append("NEVER DO:")
         context_parts.append("- Overuse conceptual questions when the student needs concrete examples.")
         context_parts.append("- Refuse to help when the student explicitly gives up.")
-        context_parts.append("- Introduce tangential topics unrelated to the current problem.")
+        context_parts.append("- Get sidetracked into long discussions unrelated to the current problem.")
+        context_parts.append("- Try to solve different problems that the student mentions - direct them to use the problem browser instead.")
         
         # Problem and User Context
         if self.current_problem:
-            context_parts.append(f"Current Problem: {self.current_problem['title']}")
-            context_parts.append(f"Problem Constraints: {self.current_problem.get('constraints', 'Not specified')}")
+            context_parts.append(f"CURRENT PROBLEM: {self.current_problem['title']}")
             context_parts.append(f"Difficulty: {self.current_problem.get('difficulty', 'Not specified')}")
+            context_parts.append("Focus all tutoring efforts on helping the student solve THIS specific problem.")
+            context_parts.append("")
+        else:
+            context_parts.append("No problem is currently loaded. Encourage the student to use the 'Browse Problems' button to select a problem to work on.")
             context_parts.append("")
 
         history_limit = 10
@@ -223,7 +243,7 @@ class CodingTutor:
         for msg in recent_history_wlimit:
             if msg['role'] == 'user':
                 context_parts.append(f"Student: {msg['content']}")
-            elif msg['role'] == 'tutor':
+            elif msg['role'] == 'alex':
                 context_parts.append(f"Alex: {msg['content']}")
         context_parts.append("")
         context_parts.append("Alex:")
@@ -242,61 +262,74 @@ class CodingTutor:
         if not self.current_problem:
             return "No problem is currently loaded."
         
-        # Analyze the code more thoroughly
-        code_lines = [line.strip() for line in code.split('\n') if line.strip()]
+        eval_prompt = f"""The student has submitted the following {language} code for the problem "{self.current_problem['title']}":
+            ```{language}
+            {code}
+            ```
+
+            As Alex, their coding assistant, analyze this code for correctness and relevance to the problem.
+            - If the code is just a default template or boilerplate (e.g., `def solution(): pass`), gently encourage the user to start writing their actual solution.
+            - If the code is valid but doesn't logically contribute to solving the problem (e.g., printing a random string, performing unrelated calculations), gently point this out and guide the user back to the problem's requirements.
+            - If the code is incorrect or doesn't solve the problem, guide them toward a better solution.
+            - If the code is a good start, encourage them and ask what the next step is.
+            - Use the Socratic method to guide, don't just give the answer.
+            - Be encouraging and focus on helping them learn."""
         
-        # Check if it's just boilerplate
-        is_boilerplate = True
-        meaningful_lines = []
+        # Use internal chat method that doesn't show the prompt to user
+        return self._chat_internal(eval_prompt)
+    
+    def _chat_internal(self, prompt):
+        """Internal chat method that doesn't add the prompt to conversation history"""
+        # Build the full conversation context
+        conversation_context = self._build_conversation_context()
         
-        for line in code_lines:
-            # Skip class definition, function signature, pass statements, and comments
-            if (line.startswith('class ') or 
-                line.startswith('def ') or 
-                line == 'pass' or 
-                line.startswith('#') or
-                line.endswith(': None:') or
-                line.endswith('-> None:')):
-                continue
-            else:
-                meaningful_lines.append(line)
-                is_boilerplate = False
+        # Add the evaluation prompt to the context
+        full_context = conversation_context + "\n\n" + prompt + "\n\nAlex:"
         
-        if is_boilerplate:
-            # It's just boilerplate - guide them to start implementing
-            eval_prompt = f"""The student submitted only the boilerplate code for "{self.current_problem['title']}":
-                ```{language}
-                {code}
-                ```
+        # Generate response
+        response = self.llm(
+            full_context,
+            max_tokens=300,  # Much more conservative limit
+            temperature=0.7,
+            top_p=0.9,
+            echo=False,
+            stop=["Student:", "User:", "Alex:", "\n\nAlex:"]
+        )
+        
+        # Extract and clean response
+        raw_response = response['choices'][0]['text'].strip()
+        
+        # Remove any leaked internal reasoning tags
+        if '</thought>' in raw_response:
+            raw_response = raw_response.split('</thought>', 1)[1].strip()
+        raw_response = re.sub(r'</?thought>', '', raw_response)
+        raw_response = re.sub(r'</?response>', '', raw_response)
+        
+        # Remove any duplicate "Alex:" prefixes
+        raw_response = re.sub(r'^Alex:\s*', '', raw_response)
+        
+        # Split by "Alex:" and take only the first response
+        if 'Alex:' in raw_response:
+            raw_response = raw_response.split('Alex:')[0].strip()
 
-                This is just the function signature with no implementation. As their Socratic tutor:
-                - Ask them what the first step should be
-                - Guide them to think about the problem requirements  
-                - Don't give away the solution, but help them identify what they need to implement
-
-                Be encouraging but point out they need to start implementing logic."""
-        else:
-            # There's actual implementation - analyze it properly
-            eval_prompt = f"""The student has submitted the following {language} code for the problem "{self.current_problem['title']}":
-                ```{language}
-                {code}
-                ```
-
-                As their Socratic tutor, analyze this code:
-                - Ask questions about their approach
-                - If there are bugs, guide them to find them through questions
-                - If it's correct, ask them to explain how it works
-                - Suggest improvements through questioning, not direct answers
-
-                Be encouraging and use questions to guide their learning."""
-        return self.chat(eval_prompt)
+        response = self._clean_response(raw_response)
+        
+        # Add only the response to history
+        self.conversation_history.append({
+            'role': 'alex',
+            'content': response,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        self.save_session()
+        return response
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
-# Initialize the tutor (this will take a moment)
-print("Initializing AI Tutor...")
+# Initialize the assistant (this will take a moment)
+print("Initializing AI Assistant...")
 # Using Qwen 7B model for better general tutoring capabilities
 model_path = hf_hub_download(repo_id="Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", 
                             filename="qwen2.5-coder-7b-instruct-q4_k_m.gguf")
@@ -308,15 +341,6 @@ dataset = load_dataset("viccon23/leetcode")
 
 print("Loaded, lets roll.")
 print(f"Dataset contains {len(dataset['train'])} problems")
-
-# Verify the problem_types column exists (Little debugging code)
-# sample_problem = dataset['train'][0]
-# print("Sample problem columns:", list(sample_problem.keys()))
-# if 'problem_types' in sample_problem:
-#     print(f"Sample problem types: {sample_problem['problem_types']}")
-#     print("✅ Problem types column detected successfully!")
-# else:
-#     print("⚠️  Warning: problem_types column not found")
 
 print("Backend ready!")
 
@@ -330,298 +354,138 @@ def chat():
         if not message:
             return jsonify({'error': 'No message provided'}), 400
         
-        # Check if user is requesting a specific type of problem
-        message_lower = message.lower()
-        # More specific keywords to avoid false positives when asking for explanations
-        problem_request_keywords = ['new problem', 'different problem', 'another problem', 'next problem',
-                                  'give me an array problem', 'give me a string problem', 'give me a tree problem',
-                                  'give me a linked list problem', 'give me a graph problem', 'give me a dynamic programming problem',
-                                  'give me a sorting problem', 'give me a binary search problem', 'give me a hash problem',
-                                  'give me a stack problem', 'give me a queue problem', 'random problem', 'give me a problem']
-        
-        # Also check for "can I get" and "I want" patterns
-        additional_patterns = ['can i get', 'can you give me', 'i want a', 'i need a', 'show me a', 'find me a']
-        
-        is_problem_request = any(keyword in message_lower for keyword in problem_request_keywords)
-        
-        # Check for additional patterns combined with problem types
-        if not is_problem_request:
-            for pattern in additional_patterns:
-                if pattern in message_lower and ('problem' in message_lower or 'question' in message_lower):
-                    is_problem_request = True
-                    break
-        
-        if is_problem_request:
-            # Check if it's a random problem request
-            if 'random' in message_lower or 'give me a problem' in message_lower:
-                problem_type = ''  # Empty means random selection
-            else:
-                # Extract the type of problem they want
-                problem_type = ''
-                if 'array' in message_lower:
-                    problem_type = 'arrays'
-                elif 'string' in message_lower:
-                    problem_type = 'strings'
-                elif 'tree' in message_lower:
-                    problem_type = 'trees'
-                elif 'linked list' in message_lower:
-                    problem_type = 'linked lists'
-                elif 'graph' in message_lower:
-                    problem_type = 'graphs'
-                elif 'dynamic programming' in message_lower or 'dp' in message_lower:
-                    problem_type = 'dynamic programming'
-                elif 'sort' in message_lower:
-                    problem_type = 'sorting'
-                elif 'binary search' in message_lower:
-                    problem_type = 'binary search'
-                elif 'two pointer' in message_lower:
-                    problem_type = 'two pointers'
-                elif 'sliding window' in message_lower:
-                    problem_type = 'sliding window'
-                elif 'hash' in message_lower:
-                    problem_type = 'hash tables'
-                elif 'stack' in message_lower:
-                    problem_type = 'stacks'
-                elif 'queue' in message_lower:
-                    problem_type = 'queues'
-            
-            # Get a problem of the requested type
-            problem_data = get_requested_problem(problem_type)
-            
-            return jsonify({
-                'response': problem_data['response'],
-                'conversation_history': tutor.conversation_history,
-                'current_problem': problem_data['problem'],
-                'problem_changed': True  # Flag to indicate the problem changed
-            })
-        
-        # Regular chat response
+        # Regular chat response - no more automatic problem detection
         response = tutor.chat(message)
         
         return jsonify({
             'response': response,
             'conversation_history': tutor.conversation_history,
-            'current_problem': tutor.current_problem
+            'current_problem': tutor.current_problem,
+            'problem_changed': False
         })
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/new-problem', methods=['POST'])
-def new_problem():
-    """Load a new random problem"""
+@app.route('/api/problems', methods=['GET'])
+def get_problems():
+    """Get all problems with optional filtering and pagination"""
     try:
-        # Handle both JSON and non-JSON requests
-        if request.is_json:
-            data = request.json or {}
-        else:
-            # Handle requests without proper Content-Type header
-            data = {}
+        # Get query parameters for filtering
+        difficulty_filters = request.args.getlist('difficulty')  # Can have multiple
+        type_filters = request.args.getlist('type')              # Can have multiple
+        search_query = request.args.get('search', '').lower()    # Search in title
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        
+        problems = []
+        for i, prob in enumerate(dataset["train"]):
+            # Apply filters
+            if difficulty_filters and prob.get('difficulty') not in difficulty_filters:
+                continue
+                
+            # Check if ALL of the selected types are present in the problem's types (AND logic)
+            if type_filters:
+                problem_types_str = prob.get('problem_types', '')
+                # Check that every selected type is present in the problem's types
+                if not all(ptype in problem_types_str for ptype in type_filters):
+                    continue
+                
+            if search_query and search_query not in prob['title'].lower():
+                continue
             
-        user_request = data.get('request', '')  # Optional user request for specific type
-        
-        print(f"New problem request: {user_request}")  # Debug logging
-        
-        if user_request.strip():
-            # User requested a specific type of problem - let LLM choose
-            response_data = get_requested_problem(user_request)
-        else:
-            # Get a random problem as before
-            problem_index = random.randint(0, min(100, len(dataset["train"])-1))
-            sample = dataset["train"][problem_index]
+            # Process problem types into an array
+            problem_types_str = prob.get('problem_types', '')
+            problem_types_array = []
+            if problem_types_str:
+                problem_types_array = [ptype.strip() for ptype in problem_types_str.split(',') if ptype.strip()]
             
-            print(f"Selected random problem: {sample['title']}")
-            
-            response = tutor.set_problem(sample['title'], sample['content'])
+            problems.append({
+                'id': i,
+                'title': prob['title'],
+                'difficulty': prob.get('difficulty', 'Unknown'),
+                'problem_types': problem_types_array
+            })
         
-            response_data = {
-                'response': response,
-                'problem': {
-                    'title': sample['title'],
-                    'description': sample['content']
-                },
-                'conversation_history': tutor.conversation_history
-            }
+        # Apply pagination
+        total_problems = len(problems)
+        start_index = (page - 1) * per_page
+        end_index = start_index + per_page
+        paginated_problems = problems[start_index:end_index]
         
-        return jsonify(response_data)
+        return jsonify({
+            'problems': paginated_problems,
+            'total': total_problems,
+            'page': page,
+            'per_page': per_page,
+            'has_more': end_index < total_problems
+        })
     
     except Exception as e:
-        print(f"Error in new_problem: {str(e)}")  # Debug logging
-        import traceback
-        traceback.print_exc()  # Print full stack trace
         return jsonify({'error': str(e)}), 500
 
-def get_requested_problem(user_request):
-    """Find and select a problem based on user's request using AI-classified problem types"""
+@app.route('/api/problems/<int:problem_id>', methods=['POST'])
+def select_problem(problem_id):
+    """Select a specific problem by ID"""
     try:
-        print(f"Processing problem request: '{user_request}'")
+        if problem_id < 0 or problem_id >= len(dataset["train"]):
+            return jsonify({'error': 'Invalid problem ID'}), 400
         
-        # If no specific request or random request, pick any problem
-        if not user_request.strip() or user_request.lower() in ['random', '']:
-            problem_index = random.randint(0, len(dataset["train"])-1)
-            selected_problem = dataset["train"][problem_index]
-            tutor_message = "Here's a random problem for you to work on!"
-        else:
-            # Map user requests to problem types
-            keywords = user_request.lower()
-            matching_types = []
-            
-            # Create mapping of user terms to actual problem types
-            type_mappings = {
-                'array': ['Array'],
-                'string': ['String'],
-                'tree': ['Tree', 'Binary Tree', 'Binary Search Tree'],
-                'linked list': ['Linked List'],
-                'graph': ['Graph', 'Depth-First Search', 'Breadth-First Search', 'Topological Sort'],
-                'dynamic programming': ['Dynamic Programming'],
-                'dp': ['Dynamic Programming'],
-                'sorting': ['Sorting'],
-                'binary search': ['Binary Search'],
-                'two pointer': ['Two Pointers'],
-                'sliding window': ['Sliding Window'],
-                'hash': ['Hash Table', 'Hash Function'],
-                'stack': ['Stack', 'Monotonic Stack'],
-                'queue': ['Queue'],
-                'heap': ['Heap'],
-                'greedy': ['Greedy'],
-                'math': ['Math', 'Number Theory'],
-                'bit manipulation': ['Bit Manipulation', 'Bitmask'],
-                'union find': ['Union Find'],
-                'trie': ['Trie'],
-                'segment tree': ['Segment Tree'],
-                'matrix': ['Matrix'],
-                'design': ['Design'],
-                'simulation': ['Simulation'],
-                'counting': ['Counting'],
-                'prefix sum': ['Prefix Sum'],
-                'geometry': ['Geometry']
-            }
-            
-            # Find matching problem types
-            for user_term, problem_types in type_mappings.items():
-                if user_term in keywords:
-                    matching_types.extend(problem_types)
-            
-            print(f"Matching problem types: {matching_types}")
-            
-            if matching_types:
-                # Filter problems by matching types
-                filtered_indices = []
-                for i in range(len(dataset["train"])):
-                    problem = dataset["train"][i]
-                    problem_types_str = problem.get('problem_types', '')
-                    
-                    # Check if any of the matching types are in this problem's types
-                    if any(ptype in problem_types_str for ptype in matching_types):
-                        filtered_indices.append(i)
-                
-                print(f"Found {len(filtered_indices)} problems matching the criteria")
-                
-                if filtered_indices:
-                    # Randomly select from filtered problems
-                    selected_index = random.choice(filtered_indices)
-                    selected_problem = dataset["train"][selected_index]
-                    
-                    # Get the actual matching types for this problem
-                    actual_types = selected_problem.get('problem_types', '')
-                    tutor_message = f"No problem, here's a {user_request} problem for you. Let me know if you have any questions!"
-                else:
-                    # Fallback to keyword search in title/content
-                    return get_requested_problem_fallback(user_request)
-            else:
-                # Fallback to keyword search in title/content
-                return get_requested_problem_fallback(user_request)
+        selected_problem = dataset["train"][problem_id]
         
-        print(f"Selected problem: {selected_problem['title']}")
+        # Process problem types into an array (same as in get_problems)
+        problem_types_str = selected_problem.get('problem_types', '')
+        problem_types_array = []
+        if problem_types_str:
+            problem_types_array = [ptype.strip() for ptype in problem_types_str.split(',') if ptype.strip()]
         
-        # Set the problem and get tutor response
-        tutor.set_problem(selected_problem['title'], selected_problem['content'])
+        # Set the problem in the tutor session
+        response = tutor.set_problem(selected_problem['title'], selected_problem['content'])
         
-        # Override the tutor's response to acknowledge the specific request
-        tutor.conversation_history[-1]['content'] = tutor_message
-        
-        return {
-            'response': tutor_message,
+        return jsonify({
+            'response': response,
             'problem': {
+                'id': problem_id,
                 'title': selected_problem['title'],
                 'description': selected_problem['content'],
-                'problem_types': selected_problem.get('problem_types', 'Not classified'),
+                'problem_types': problem_types_array,
                 'difficulty': selected_problem.get('difficulty', 'Unknown')
             },
-            'conversation_history': tutor.conversation_history
-        }
-        
+            'conversation_history': tutor.conversation_history,
+            'problem_changed': True
+        })
+    
     except Exception as e:
-        print(f"Error in get_requested_problem: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        # Fallback to random problem on error
-        return get_requested_problem_fallback(user_request)
+        return jsonify({'error': str(e)}), 500
 
-def get_requested_problem_fallback(user_request):
-    """Fallback function for problem selection using title/content search"""
+@app.route('/api/filters', methods=['GET'])
+def get_filters():
+    """Get available filter options"""
     try:
-        keywords = user_request.lower()
-        filtered_problems = []
+        # Get unique difficulties
+        difficulties = set()
+        problem_types = set()
         
-        # Search through problems for keywords in title/content
-        for i in range(min(500, len(dataset["train"]))):  # Search more problems
-            problem = dataset["train"][i]
-            title_lower = problem['title'].lower()
-            content_lower = problem['content'].lower()
+        for prob in dataset["train"]:
+            difficulty = prob.get('difficulty')
+            if difficulty:
+                difficulties.add(difficulty)
             
-            # Check if the problem matches user's request
-            if ('array' in keywords and ('array' in title_lower or 'array' in content_lower)) or \
-               ('string' in keywords and ('string' in title_lower or 'string' in content_lower)) or \
-               ('tree' in keywords and ('tree' in title_lower or 'binary tree' in content_lower)) or \
-               ('linked list' in keywords and ('linked list' in title_lower or 'listnode' in content_lower)) or \
-               ('graph' in keywords and ('graph' in title_lower or 'graph' in content_lower)) or \
-               ('dynamic programming' in keywords and ('dynamic' in content_lower or 'dp' in content_lower)) or \
-               ('sorting' in keywords and ('sort' in title_lower or 'sort' in content_lower)) or \
-               ('binary search' in keywords and ('binary search' in title_lower or 'binary search' in content_lower)):
-                filtered_problems.append((i, problem))
+            types = prob.get('problem_types', '')
+            if types:
+                # Split problem types and clean them
+                for ptype in types.split(','):
+                    cleaned_type = ptype.strip()
+                    if cleaned_type:
+                        problem_types.add(cleaned_type)
         
-        if filtered_problems:
-            selected_index, selected_problem = random.choice(filtered_problems)
-            tutor_message = f"I found a {user_request} problem for you using keyword search. Here's what we'll work on:"
-        else:
-            # Complete fallback to random
-            problem_index = random.randint(0, min(100, len(dataset["train"])-1))
-            selected_problem = dataset["train"][problem_index]
-            tutor_message = f"I couldn't find a specific problem matching '{user_request}', so I picked this interesting one for you!"
-        
-        tutor.set_problem(selected_problem['title'], selected_problem['content'])
-        tutor.conversation_history[-1]['content'] = tutor_message
-        
-        return {
-            'response': tutor_message,
-            'problem': {
-                'title': selected_problem['title'],
-                'description': selected_problem['content'],
-                'problem_types': selected_problem.get('problem_types', 'Not classified'),
-                'difficulty': selected_problem.get('difficulty', 'Unknown')
-            },
-            'conversation_history': tutor.conversation_history
-        }
-        
+        return jsonify({
+            'difficulties': sorted(list(difficulties)),
+            'problem_types': sorted(list(problem_types))
+        })
+    
     except Exception as e:
-        print(f"Error in fallback: {str(e)}")
-        # Final fallback
-        problem_index = random.randint(0, min(100, len(dataset["train"])-1))
-        sample = dataset["train"][problem_index]
-        response = tutor.set_problem(sample['title'], sample['content'])
-        
-        return {
-            'response': "Here's a problem to work on!",
-            'problem': {
-                'title': sample['title'],
-                'description': sample['content'],
-                'problem_types': sample.get('problem_types', 'Not classified'),
-                'difficulty': sample.get('difficulty', 'Unknown')
-            },
-            'conversation_history': tutor.conversation_history
-        }
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/evaluate-code', methods=['POST'])
 def evaluate_code():

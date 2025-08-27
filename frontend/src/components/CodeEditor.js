@@ -58,18 +58,15 @@ const CodeEditor = ({ code, onCodeChange, onEvaluate, isLoading, currentProblem 
   return (
     <div className="code-editor">
       <div className="editor-header">
-        <h2>💻 Code Editor</h2>
+        <h2>Code Editor</h2>
         <div className="editor-controls">
           <button 
             onClick={handleEvaluate}
             disabled={!code.trim() || isLoading}
             className="evaluate-button"
           >
-            {isLoading ? '⏳ Getting Feedback...' : '� Get Code Review'}
+            {isLoading ? '⏳ Getting Feedback...' : 'Get Code Review'}
           </button>
-          <span className="submit-explanation">
-            This sends your code to the AI tutor for analysis and feedback
-          </span>
         </div>
       </div>
       
