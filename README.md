@@ -11,7 +11,6 @@ I was inspired after watching Neetcode videos and thinking of how convenient it 
 ### Interactive AI Tutor
 - **Personalized Guidance**: The AI tutor (Alex) provides hints and encouragement rather than direct solutions
 - **Natural Conversations**: Ask questions, request specific problem types, or get help when stuck
-- **Problem Selection**: Request problems by category ("give me an array problem") or ask for random challenges
 - **Code Evaluation**: Submit your code for feedback and suggestions
 
 ### Smart Problem Management  

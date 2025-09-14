@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './ChatPanel.css';
 
-const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading }) => {
+const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading, onMarkComplete }) => {
   const [message, setMessage] = useState('');
   const messagesEndRef = useRef(null);
 
@@ -21,15 +25,52 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading }) =
     }
   };
 
-  const formatMessage = (content) => {
-    // Convert newlines to <br> tags and preserve formatting
-    return content.split('\n').map((line, index) => (
-      <React.Fragment key={index}>
-        {line}
-        {index < content.split('\n').length - 1 && <br />}
-      </React.Fragment>
-    ));
-  };
+
+  const renderMarkdown = (content) => (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code({ node, inline, className, children, ...props }) {
+          const match = /language-(\w+)/.exec(className || '');
+          const language = match ? match[1] : 'text';
+          const text = String(children).replace(/\n$/, '');
+          if (inline) {
+            return (
+              <code className={className} {...props}>
+                {text}
+              </code>
+            );
+          }
+          // If it's a single short line fenced/indented block, render as inline pill
+          const isShortSingleLine = !text.includes('\n') && text.trim().length > 0 && text.length <= 80;
+          if (isShortSingleLine) {
+            return (
+              <code className={`inline-code-block ${className || ''}`} {...props}>
+                {text}
+              </code>
+            );
+          }
+          return (
+            <SyntaxHighlighter
+              style={vscDarkPlus}
+              language={language}
+              PreTag="div"
+              customStyle={{
+                margin: '1rem 0',
+                borderRadius: '6px',
+                fontSize: '0.9rem',
+                overflowX: 'auto'
+              }}
+            >
+              {text}
+            </SyntaxHighlighter>
+          );
+        }
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 
   const renderMessage = (msg, index) => {
     const isUser = msg.role === 'user';
@@ -40,14 +81,14 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading }) =
       <div key={index} className={`message ${isUser ? 'user' : isSystem ? 'system' : isError ? 'error' : 'tutor'}`}>
         <div className="message-header">
           <span className="message-role">
-            {isUser ? '👤 You' : isSystem ? '📋 System' : isError ? '❌ Error' : '🤖 Tutor'}
+            {isUser ? '👤 You' : isSystem ? '📋 SYSTEM' : isError ? '❌ Error' : '🤖 Alex'}
           </span>
           <span className="message-time">
             {new Date(msg.timestamp).toLocaleTimeString()}
           </span>
         </div>
         <div className="message-content">
-          {formatMessage(msg.content)}
+          {renderMarkdown(msg.content)}
         </div>
       </div>
     );
@@ -57,8 +98,24 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading }) =
     <div className="chat-panel">
       <div className="chat-header">
         {currentProblem && (
-          <div className="current-problem">
-            <strong>Current Problem:</strong> {currentProblem.title}
+          <div className="current-problem" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'space-between' }}>
+            <div>
+              <strong>Current Problem:</strong> {currentProblem.title} <strong> Difficulty:</strong> {currentProblem.difficulty}
+              {currentProblem.completed ? (
+                <span style={{ marginLeft: '0.5rem', color: '#2e7d32' }}>✓ Completed</span>
+              ) : null}
+            </div>
+            <div>
+              <button
+                onClick={onMarkComplete}
+                disabled={isLoading || !currentProblem || currentProblem.completed}
+                className="send-button"
+                title={currentProblem.completed ? 'Already completed' : 'Mark as Complete'}
+                style={{ width: 'auto', height: '32px', padding: '0 12px', borderRadius: '16px' }}
+              >
+                {currentProblem?.completed ? 'Completed' : 'Mark as Complete'}
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -8,7 +8,7 @@ import api from './services/api';
 function App() {
   const [conversation, setConversation] = useState([]);
   const [currentProblem, setCurrentProblem] = useState(null);
-  const [code, setCode] = useState('# Write your solution here\ndef solution():\n    pass');
+  const [code, setCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showProblemBrowser, setShowProblemBrowser] = useState(false);
 
@@ -66,9 +66,7 @@ function App() {
       setConversation(response.data.conversation_history || []);
       setCurrentProblem(response.data.problem);
       setShowProblemBrowser(false);
-      
-      // Reset to clean code editor
-      setCode('# Write your solution here\ndef solution():\n    pass');
+      setCode('');
     } catch (error) {
       console.error('Failed to select problem:', error);
     } finally {
@@ -78,6 +76,20 @@ function App() {
 
   const startNewProblem = async () => {
     setShowProblemBrowser(true);
+  };
+
+  const markCurrentProblemComplete = async () => {
+    if (!currentProblem || currentProblem.id == null) return;
+    setIsLoading(true);
+    try {
+      await api.post(`/problems/${currentProblem.id}/completion`, { completed: true });
+      setConversation(prev => [...prev, { role: 'system', content: `Problem '${currentProblem.title}' marked as completed.`, timestamp: new Date().toISOString() }]);
+      await loadStatus();
+    } catch (error) {
+      console.error('Failed to mark problem complete:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const evaluateCode = async () => {
@@ -97,15 +109,14 @@ function App() {
     }
   };
 
-  const clearSession = async () => {
+  const clearChat = async () => {
     setIsLoading(true);
     try {
-      await api.post('/clear-session', {});
+      await api.post('/clear-chat', {});
       setConversation([]);
-      setCurrentProblem(null);
       setCode('# Write your solution here\ndef solution():\n    pass');
     } catch (error) {
-      console.error('Failed to clear session:', error);
+      console.error('Failed to clear Chat:', error);
     } finally {
       setIsLoading(false);
     }
@@ -119,8 +130,8 @@ function App() {
           <button onClick={startNewProblem} disabled={isLoading}>
             Browse Problems
           </button>
-          <button onClick={clearSession} disabled={isLoading}>
-            Clear Session
+          <button onClick={clearChat} disabled={isLoading}>
+            Clear Chat
           </button>
         </div>
       </header>
@@ -132,6 +143,7 @@ function App() {
             currentProblem={currentProblem}
             onSendMessage={sendMessage}
             isLoading={isLoading}
+            onMarkComplete={markCurrentProblemComplete}
           />
         </div>
         

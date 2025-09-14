@@ -14,6 +14,7 @@ class CodingTutor:
         self.session_file = session_file
         self.conversation_history = []
         self.current_problem = None
+        self.completed_problems = set()
         
         # Load existing session if it exists
         self.load_session()
@@ -45,16 +46,20 @@ class CodingTutor:
                     session_data = json.load(f)
                     self.conversation_history = session_data.get('conversation_history', [])
                     self.current_problem = session_data.get('current_problem', None)
+                    # Load completed problems safely
+                    self.completed_problems = set(session_data.get('completed_problems', []))
                 print(f"Loaded previous session with {len(self.conversation_history)} messages")
             except Exception as e:
                 print(f"Could not load session: {e}")
                 self.conversation_history = []
+                self.completed_problems = set()
     
     def save_session(self):
         """Save current conversation history to file"""
         session_data = {
             'conversation_history': self.conversation_history,
             'current_problem': self.current_problem,
+            'completed_problems': list(self.completed_problems),
             'last_updated': datetime.now().isoformat()
         }
         try:
@@ -63,14 +68,18 @@ class CodingTutor:
         except Exception as e:
             print(f"Could not save session: {e}")
     
-    def set_problem(self, problem_title, problem_desc):
+    def set_problem(self, problem_data):
         """Set a new coding problem"""
         self.current_problem = {
-            'title': problem_title,
-            'description': problem_desc
+            'title': problem_data.get('title', 'Unknown'),
+            'description': problem_data.get('description', ''),
+            'difficulty': problem_data.get('difficulty', 'Unknown'),
+            'problem_types': problem_data.get('problem_types', []),
+            'id': problem_data.get('id')
         }
         
         # Add system message about the new problem
+        problem_title = self.current_problem['title']
         system_msg = f"New coding problem started: {problem_title}"
         self.conversation_history.append({
             'role': 'system',
@@ -95,10 +104,22 @@ class CodingTutor:
             'timestamp': datetime.now().isoformat()
         })
         
-        # Save session after adding the response
         self.save_session()
         
         return response
+    
+    def mark_problem_completed(self, problem_id):
+        self.completed_problems.add(problem_id)
+        self.save_session()
+        return True
+
+    def mark_problem_uncompleted(self, problem_id):
+        self.completed_problems.discard(problem_id)
+        self.save_session()
+        return True
+    
+    def is_problem_completed(self, problem_id):
+        return problem_id in self.completed_problems
     
     def chat(self, user_message, is_initial=False):
         """Continue the conversation with Alex"""
@@ -152,21 +173,44 @@ class CodingTutor:
         return response
     
     def _clean_response(self, response):
-        """Clean up the response to remove stage directions and unwanted patterns"""
-        import re
-        
-        # Remove stage directions in parentheses like "(pauses)", "(thinks)", etc, and common unwanted patterns and phrases.
-        response = re.sub(r'\([^)]*\)', '', response)
-        response = re.sub(r'\*[^*]*\*', '', response)  # Remove *action* text
-        response = re.sub(r'\b(let me think|thinking|pondering|considering)\b', '', response, flags=re.IGNORECASE)
-        
-        # Remove trailing colons that might be conversation artifacts
-        response = re.sub(r':\s*$', '', response)
-        
-        # Clean up extra whitespace and normalize spaces
-        response = ' '.join(response.split())
-        
-        return response.strip()
+        """Clean up the response while preserving code blocks and line breaks.
+
+        Important: Do NOT strip parentheses or collapse whitespace globally,
+        as that destroys code formatting. Only clean non-code text segments.
+        """
+        # Split out fenced code blocks so we don't touch them
+        code_pattern = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+        code_blocks = code_pattern.findall(response)
+        parts = code_pattern.split(response)
+
+        cleaned_parts = []
+        for part in parts:
+            text = part
+            # Remove light-weight stage directions in asterisks or brackets (non-greedy, single-line)
+            text = re.sub(r"\*[^^\n*]{0,80}\*", "", text)
+            text = re.sub(r"\[[^\]\n]{0,80}\]", "", text)
+            # Remove common meta phrases
+            text = re.sub(r"\b(let me think|thinking|pondering|considering)\b", "", text, flags=re.IGNORECASE)
+            # Remove duplicated role prefixes at start of lines
+            text = re.sub(r"(^|\n)\s*Alex:\s*", r"\1", text)
+            # Normalize excessive blank lines but keep line structure
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            # Trim trailing spaces per line
+            lines = [ln.rstrip() for ln in text.splitlines()]
+            text = "\n".join(lines)
+            cleaned_parts.append(text)
+
+        # Reassemble, interleaving preserved code blocks
+        rebuilt = []
+        for i, part in enumerate(cleaned_parts):
+            rebuilt.append(part)
+            if i < len(code_blocks):
+                rebuilt.append(code_blocks[i])
+
+        cleaned = "".join(rebuilt).strip()
+        # Final minor cleanup: remove a trailing colon at end of entire message only
+        cleaned = re.sub(r":\s*$", "", cleaned)
+        return cleaned
     
     
     def _build_conversation_context(self, initial_prompt=None):
@@ -181,8 +225,8 @@ class CodingTutor:
         context_parts = []
         
         # Core Role and Instructions
-        context_parts.append("You are Alex, an expert coding tutor specializing in LeetCode problems. Your name is Alex.")
-        context_parts.append("The user is the student. Never refer to the user as 'Alex'.")
+        context_parts.append("You are Alex, an expert coding tutor specializing in LeetCode problems.")
+        context_parts.append("The user is the student.")
         context_parts.append("Your goal is to guide the user to a solution, providing hints and asking questions to foster discovery, but provide the solution with explanation and Python code if they explicitly give up or request it.")
         
         # LeetCode-Specific Guidance
@@ -194,7 +238,7 @@ class CodingTutor:
         context_parts.append("COMMUNICATION STYLE:")
         context_parts.append("- Be direct, honest, and natural. If you don't understand something, ask for clarification.")
         context_parts.append("- Maintain an encouraging tone, especially when the student is frustrated, and celebrate small wins.")
-        context_parts.append("- Keep responses concise and focused. Ask ONE clear question at a time rather than multiple questions.")
+        context_parts.append("- Keep responses concise and focused. Ask ONE clear question at a time, NOT multiple questions.")
         context_parts.append("- Avoid repeating the same question or concept multiple times in one response.")
         
         # Tutoring Approach
@@ -249,20 +293,19 @@ class CodingTutor:
         context_parts.append("Alex:")
         return "\n".join(context_parts)
     
-    def clear_session(self):
+    def clear_chat(self):
         """Clear the current session and start fresh"""
         self.conversation_history = []
-        self.current_problem = None
         if os.path.exists(self.session_file):
             os.remove(self.session_file)
-        print("Session cleared!")
+        print("Chat cleared!")
 
     def evaluate_code(self, code, language="python"):
         """Evaluate user's code attempt"""
         if not self.current_problem:
             return "No problem is currently loaded."
         
-        eval_prompt = f"""The student has submitted the following {language} code for the problem "{self.current_problem['title']}":
+        eval_prompt = f"""The student submitted the following {language} code for the problem "{self.current_problem['title']}":
             ```{language}
             {code}
             ```
@@ -289,7 +332,7 @@ class CodingTutor:
         # Generate response
         response = self.llm(
             full_context,
-            max_tokens=300,  # Much more conservative limit
+            max_tokens=800,
             temperature=0.7,
             top_p=0.9,
             echo=False,
@@ -353,8 +396,43 @@ def chat():
         
         if not message:
             return jsonify({'error': 'No message provided'}), 400
+
+        # Handle simple slash commands without invoking the LLM
+        lower = message.strip().lower()
+        if lower.startswith('/done') or lower.startswith('/complete') or lower == 'mark as complete':
+            if tutor.current_problem is None:
+                # No current problem to complete
+                sys_msg = {
+                    'role': 'system',
+                    'content': 'No problem is currently loaded to mark as complete.',
+                    'timestamp': datetime.now().isoformat()
+                }
+                tutor.conversation_history.append(sys_msg)
+                tutor.save_session()
+                return jsonify({
+                    'response': sys_msg['content'],
+                    'conversation_history': tutor.conversation_history,
+                    'current_problem': tutor.current_problem,
+                    'problem_changed': False
+                })
+
+            pid = tutor.current_problem.get('id')
+            if pid is not None:
+                tutor.mark_problem_completed(pid)
+            sys_msg = {
+                'role': 'system',
+                'content': f"Problem '{tutor.current_problem.get('title','')}' marked as completed.",
+                'timestamp': datetime.now().isoformat()
+            }
+            tutor.conversation_history.append(sys_msg)
+            tutor.save_session()
+            return jsonify({
+                'response': sys_msg['content'],
+                'conversation_history': tutor.conversation_history,
+                'current_problem': tutor.current_problem,
+                'problem_changed': False
+            })
         
-        # Regular chat response - no more automatic problem detection
         response = tutor.chat(message)
         
         return jsonify({
@@ -404,7 +482,8 @@ def get_problems():
                 'id': i,
                 'title': prob['title'],
                 'difficulty': prob.get('difficulty', 'Unknown'),
-                'problem_types': problem_types_array
+                'problem_types': problem_types_array,
+                'completed': tutor.is_problem_completed(i)
             })
         
         # Apply pagination
@@ -440,23 +519,49 @@ def select_problem(problem_id):
             problem_types_array = [ptype.strip() for ptype in problem_types_str.split(',') if ptype.strip()]
         
         # Set the problem in the tutor session
-        response = tutor.set_problem(selected_problem['title'], selected_problem['content'])
+        problem_data = {
+            'id': problem_id,
+            'title': selected_problem['title'],
+            'description': selected_problem['content'],
+            'problem_types': problem_types_array,
+            'difficulty': selected_problem.get('difficulty', 'Unknown'),
+            'completed': tutor.is_problem_completed(problem_id)
+        }
+        response = tutor.set_problem(problem_data)
         
         return jsonify({
             'response': response,
-            'problem': {
-                'id': problem_id,
-                'title': selected_problem['title'],
-                'description': selected_problem['content'],
-                'problem_types': problem_types_array,
-                'difficulty': selected_problem.get('difficulty', 'Unknown')
-            },
+            'problem': problem_data,
             'conversation_history': tutor.conversation_history,
             'problem_changed': True
         })
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+@app.route('/api/problems/<int:problem_id>/completion', methods=['POST'])
+def toggle_problem_completion(problem_id):
+
+    try:
+        if problem_id < 0 or problem_id >= len(dataset["train"]):
+            return jsonify({'error': 'Invalid problem ID'}), 400
+        data = request.json
+        completed = data.get('completed', False)
+
+        if completed:
+            tutor.mark_problem_completed(problem_id)
+        else:
+            tutor.mark_problem_uncompleted(problem_id)
+        
+        return jsonify({
+            'problem_id': problem_id,
+            'completed': completed,
+            'message': f'Problem {"completed" if completed else "uncompleted"} successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/filters', methods=['GET'])
 def get_filters():
@@ -508,11 +613,11 @@ def evaluate_code():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/clear-session', methods=['POST'])
+@app.route('/api/clear-chat', methods=['POST'])
 def clear_session():
-    """Clear the current session"""
+    """Clear the current chat"""
     try:
-        tutor.clear_session()
+        tutor.clear_chat()
         return jsonify({'message': 'Session cleared successfully'})
     
     except Exception as e:
@@ -521,11 +626,19 @@ def clear_session():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get current session status"""
+    current = tutor.current_problem
+    # Attach completion flag if there's a current problem
+    if current is not None:
+        current_with_flag = dict(current)
+        pid = current.get('id')
+        current_with_flag['completed'] = tutor.is_problem_completed(pid) if pid is not None else False
+    else:
+        current_with_flag = None
     return jsonify({
-        'current_problem': tutor.current_problem,
+        'current_problem': current_with_flag,
         'conversation_history': tutor.conversation_history,
         'message_count': len(tutor.conversation_history)
     })
 
 if __name__ == '__main__':
-    app.run(debug=False, host='127.0.0.1', port=5000)
+    app.run(debug=True, host='127.0.0.1', port=5000)

@@ -162,6 +162,35 @@
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
+.problem-completion {
+  margin-right: 1rem;
+  display: flex;
+  align-items: center;
+}
+
+.completion-checkbox {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #28a745;
+}
+
+.problem-title.completed {
+  text-decoration: line-through;
+  color: #28a745;
+  font-weight: 600;
+}
+
+.problem-item:has(.completion-checkbox:checked) {
+  background-color: #f8f9fa;
+  border-color: #28a745;
+}
+
+.problem-item:has(.completion-checkbox:checked):hover {
+  border-color: #28a745;
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.1);
+}
+
 .problem-item:hover {
   border-color: #007acc;
   box-shadow: 0 2px 8px rgba(0, 122, 204, 0.1);
@@ -285,7 +314,6 @@
   background: #a8a8a8;
 }
 
-/* Responsive design */
 @media (max-width: 768px) {
   .problem-browser-modal {
     width: 95%;

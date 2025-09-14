@@ -93,6 +93,22 @@ const ProblemBrowser = ({ onSelectProblem, onClose, isLoading }) => {
     );
   };
 
+  const handleCompletionToggle = async (problemId, currentStatus) => {
+    try {
+      await api.post(`/problems/${problemId}/completion`, {
+        completed: !currentStatus
+      });
+
+      setProblems(prev =>
+        prev.map(problem =>
+          problem.id === problemId ? {...problem, completed: !currentStatus } :problem
+        )
+      );  
+    } catch (error) {
+      console.error('Failed to toggle completion: ', error);
+    }
+  };
+
   const clearFilters = () => {
     setSearchTerm('');
     setSelectedDifficulties([]);
@@ -171,8 +187,19 @@ const ProblemBrowser = ({ onSelectProblem, onClose, isLoading }) => {
         <div className="problems-list">
           {problems.map(problem => (
             <div key={problem.id} className="problem-item">
+              <div className="problem-completion">
+                <input
+                  type="checkbox"
+                  checked={problem.completed || false}
+                  onChange={() => handleCompletionToggle(problem.id, problem.completed)}
+                  className="completion-checkbox"
+                  title={problem.completed ? "Mark as uncompleted" : "Mark as completed"}
+                />
+              </div>
               <div className="problem-info">
-                <div className="problem-title">{problem.title}</div>
+                <div className={`problem-title ${problem.completed ? 'completed' : ''}`}>
+                  {problem.title}
+                </div>
                 <div className="problem-meta">
                   <span 
                     className="problem-difficulty"
