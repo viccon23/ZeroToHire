@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sock import Sock
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 import torch
@@ -8,16 +9,30 @@ import json
 import os
 from datetime import datetime
 import re
+from dotenv import load_dotenv
+from database import Database
+
+# Load environment variables
+load_dotenv()
 
 class CodingTutor:
-    def __init__(self, model_path, session_file="tutor_session.json"):
-        self.session_file = session_file
-        self.conversation_history = []
-        self.current_problem = None
-        self.completed_problems = set()
+    def __init__(self, model_path, db: Database):
+        """Initialize the coding tutor with database storage."""
+        self.db = db
         
-        # Load existing session if it exists
-        self.load_session()
+        # Load conversation history from database (LIMIT to recent messages only to prevent context overflow)
+        self.conversation_history = self.db.get_conversation_history(limit=10)
+        
+        # Load current problem from database
+        self.current_problem = self.db.get_current_problem()
+        
+        print(f"Loaded session with {len(self.conversation_history)} recent messages")
+        
+        # Load model configuration from environment
+        n_ctx = int(os.getenv('MODEL_N_CTX', 4096))
+        n_threads = int(os.getenv('MODEL_N_THREADS', 4))
+        n_gpu_layers = int(os.getenv('MODEL_N_GPU_LAYERS', -1))
+        n_batch = int(os.getenv('MODEL_N_BATCH', 512))
         
         # Load the model
         print("Loading model...")
@@ -28,45 +43,28 @@ class CodingTutor:
         
         self.llm = Llama(
             model_path=model_path,
-            n_ctx=4096,
-            n_threads=4,
-            n_gpu_layers=-1,  
+            n_ctx=n_ctx,
+            n_threads=n_threads,
+            n_gpu_layers=n_gpu_layers,  
             verbose=True,    
-            n_batch=512,     
+            n_batch=n_batch,     
             use_mmap=True,    
             use_mlock=False   
         )
         print("Model loaded successfully!")
     
-    def load_session(self):
-        """Load previous conversation history from file"""
-        if os.path.exists(self.session_file):
-            try:
-                with open(self.session_file, 'r', encoding='utf-8') as f:
-                    session_data = json.load(f)
-                    self.conversation_history = session_data.get('conversation_history', [])
-                    self.current_problem = session_data.get('current_problem', None)
-                    # Load completed problems safely
-                    self.completed_problems = set(session_data.get('completed_problems', []))
-                print(f"Loaded previous session with {len(self.conversation_history)} messages")
-            except Exception as e:
-                print(f"Could not load session: {e}")
-                self.conversation_history = []
-                self.completed_problems = set()
-    
-    def save_session(self):
-        """Save current conversation history to file"""
-        session_data = {
-            'conversation_history': self.conversation_history,
-            'current_problem': self.current_problem,
-            'completed_problems': list(self.completed_problems),
-            'last_updated': datetime.now().isoformat()
+    def _add_message_to_history(self, role: str, content: str):
+        """Add message to history and save to database."""
+        message = {
+            'role': role,
+            'content': content,
+            'timestamp': datetime.now().isoformat()
         }
-        try:
-            with open(self.session_file, 'w', encoding='utf-8') as f:
-                json.dump(session_data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"Could not save session: {e}")
+        self.conversation_history.append(message)
+        
+        # Save to database
+        problem_id = self.current_problem.get('id') if self.current_problem else None
+        self.db.save_message(role, content, problem_id)
     
     def set_problem(self, problem_data):
         """Set a new coding problem"""
@@ -78,14 +76,17 @@ class CodingTutor:
             'id': problem_data.get('id')
         }
         
+        # Save problem to database
+        self.db.set_problem(
+            self.current_problem['id'],
+            self.current_problem['title'],
+            self.current_problem['difficulty']
+        )
+        
         # Add system message about the new problem
         problem_title = self.current_problem['title']
         system_msg = f"New coding problem started: {problem_title}"
-        self.conversation_history.append({
-            'role': 'system',
-            'content': system_msg,
-            'timestamp': datetime.now().isoformat()
-        })
+        self._add_message_to_history('system', system_msg)
         
         # Check if this is the first problem or a new problem in an existing session
         has_previous_conversation = len([msg for msg in self.conversation_history if msg['role'] in ['user', 'assistant', 'alex']]) > 0
@@ -97,50 +98,66 @@ class CodingTutor:
             # First problem in session
             response = f"Hello! I'm Alex, your coding assistant. I see you're working on '{problem_title}'. Before we start coding, let's make sure we understand the problem. Can you read through the problem description and tell me what you think it's asking us to do? Let me know if you have any questions!"
         
-        # Add the response directly to history instead of generating it
-        self.conversation_history.append({
-            'role': 'alex',
-            'content': response,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        self.save_session()
+        # Add the response directly to history
+        self._add_message_to_history('alex', response)
         
         return response
     
     def mark_problem_completed(self, problem_id):
-        self.completed_problems.add(problem_id)
-        self.save_session()
+        """Mark a problem as completed in database."""
+        self.db.mark_problem_complete(problem_id)
         return True
 
     def mark_problem_uncompleted(self, problem_id):
-        self.completed_problems.discard(problem_id)
-        self.save_session()
+        """Mark a problem as incomplete in database."""
+        self.db.mark_problem_incomplete(problem_id)
         return True
     
     def is_problem_completed(self, problem_id):
-        return problem_id in self.completed_problems
+        """Check if problem is completed."""
+        return self.db.is_problem_completed(problem_id)
     
-    def chat(self, user_message, is_initial=False):
-        """Continue the conversation with Alex"""
-        self.conversation_history.append({
-            'role': 'user',
-            'content': user_message,
-            'timestamp': datetime.now().isoformat()
-        })
+    def chat(self, user_message, is_initial=False, code_context=None):
+        """Continue the conversation with Alex
+        
+        Args:
+            user_message: The user's message
+            is_initial: Whether this is an initial message
+            code_context: Optional code context to include automatically
+        """
+        self._add_message_to_history('user', user_message)
         
         # Build the full conversation context
-        conversation_context = self._build_conversation_context(user_message if is_initial else None)
-        
-        # Generate response
-        response = self.llm(
-            conversation_context,
-            max_tokens= 400,
-            temperature=0.7,
-            top_p=0.9,
-            echo=False,
-            stop=["Student:", "User:", "Alex:", "\n\nAlex:", "\nAlex:"]
+        conversation_context = self._build_conversation_context(
+            user_message if is_initial else None,
+            code_context=code_context
         )
+        
+        # Get model parameters from environment
+        max_tokens = int(os.getenv('MODEL_MAX_TOKENS', 400))
+        temperature = float(os.getenv('MODEL_TEMPERATURE', 0.7))
+        top_p = float(os.getenv('MODEL_TOP_P', 0.9))
+        
+        # Generate response with error handling
+        try:
+            print(f"Generating response (context: ~{len(conversation_context)//4} tokens)...")
+            response = self.llm(
+                conversation_context,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                echo=False,
+                stop=["Student:", "User:", "Alex:", "\n\nAlex:", "\nAlex:"]
+            )
+            print("Response generated successfully!")
+        except Exception as e:
+            print(f"ERROR during model generation: {str(e)}")
+            print(f"Context length was: {len(conversation_context)} chars (~{len(conversation_context)//4} tokens)")
+            print("Context may be too large or model encountered an error.")
+            # Return a safe fallback response
+            fallback = "I apologize, but I encountered a technical issue. Could you try rephrasing your question? If this persists, try using 'Clear Chat' to start fresh."
+            self._add_message_to_history('alex', fallback)
+            return fallback
         
         # Extract response text and clean it up
         raw_response = response['choices'][0]['text'].strip()
@@ -161,16 +178,65 @@ class CodingTutor:
         response = self._clean_response(raw_response)
         
         # Add response to history
-        self.conversation_history.append({
-            'role': 'alex',
-            'content': response,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        # Save session after each interaction
-        self.save_session()
+        self._add_message_to_history('alex', response)
         
         return response
+    
+    def chat_stream(self, user_message, is_initial=False, code_context=None):
+        """Stream the assistant's response token-by-token."""
+        self._add_message_to_history('user', user_message)
+        
+        conversation_context = self._build_conversation_context(
+            user_message if is_initial else None,
+            code_context=code_context
+        )
+        
+        max_tokens = int(os.getenv('MODEL_MAX_TOKENS', 400))
+        temperature = float(os.getenv('MODEL_TEMPERATURE', 0.7))
+        top_p = float(os.getenv('MODEL_TOP_P', 0.9))
+        
+        accumulated_chunks = []
+        try:
+            print(f"Streaming response (context: ~{len(conversation_context)//4} tokens)...")
+            stream = self.llm(
+                conversation_context,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                echo=False,
+                stop=["Student:", "User:", "Alex:", "\n\nAlex:", "\nAlex:"],
+                stream=True
+            )
+            for chunk in stream:
+                token = chunk['choices'][0].get('text', '')
+                if not token:
+                    continue
+                accumulated_chunks.append(token)
+                yield {'type': 'token', 'token': token}
+        except Exception as e:
+            print(f"ERROR during streaming generation: {str(e)}")
+            print(f"Context length was: {len(conversation_context)} chars (~{len(conversation_context)//4} tokens)")
+            fallback = "I apologize, but I encountered a technical issue. Could you try rephrasing your question? If this persists, try using 'Clear Chat' to start fresh."
+            self._add_message_to_history('alex', fallback)
+            yield {'type': 'error', 'error': fallback}
+            return
+        
+        raw_response = ''.join(accumulated_chunks).strip()
+        if '</thought>' in raw_response:
+            raw_response = raw_response.split('</thought>', 1)[1].strip()
+        raw_response = re.sub(r'</?thought>', '', raw_response)
+        raw_response = re.sub(r'</?response>', '', raw_response)
+        
+        role_markers = ['Alex:', 'Student:', 'User:']
+        for marker in role_markers:
+            if marker in raw_response:
+                raw_response = raw_response.split(marker)[0].strip()
+                break
+        
+        response = self._clean_response(raw_response)
+        self._add_message_to_history('alex', response)
+        
+        yield {'type': 'final', 'message': response}
     
     def _clean_response(self, response):
         """Clean up the response while preserving code blocks and line breaks.
@@ -213,8 +279,13 @@ class CodingTutor:
         return cleaned
     
     
-    def _build_conversation_context(self, initial_prompt=None):
-        """Build the full conversation context for the model"""
+    def _build_conversation_context(self, initial_prompt=None, code_context=None):
+        """Build the full conversation context for the model
+        
+        Args:
+            initial_prompt: Optional initial prompt to use
+            code_context: Optional code context to include
+        """
         if initial_prompt:
             return initial_prompt
         
@@ -270,6 +341,16 @@ class CodingTutor:
         context_parts.append("- Get sidetracked into long discussions unrelated to the current problem.")
         context_parts.append("- Try to solve different problems that the student mentions - direct them to use the problem browser instead.")
         
+        # Add code context if provided
+        if code_context and code_context.get('code', '').strip():
+            context_parts.append("")
+            context_parts.append("STUDENT'S CURRENT CODE:")
+            context_parts.append("```python")
+            context_parts.append(code_context['code'])
+            context_parts.append("```")
+            context_parts.append("Note: The student has this code in their editor. Consider it when providing guidance.")
+            context_parts.append("")
+        
         # Problem and User Context
         if self.current_problem:
             context_parts.append(f"CURRENT PROBLEM: {self.current_problem['title']}")
@@ -280,24 +361,49 @@ class CodingTutor:
             context_parts.append("No problem is currently loaded. Encourage the student to use the 'Browse Problems' button to select a problem to work on.")
             context_parts.append("")
 
-        history_limit = 10
-        recent_history = self.conversation_history
-        recent_history_wlimit = recent_history[-history_limit:]
+        # CRITICAL: Limit conversation history to prevent context overflow
+        # Estimate: System prompt ~1000 tokens, each message ~100-200 tokens
+        # With 4096 context and 400 max_tokens output, we need ~3600 tokens max for input
+        # Keep only last 5 messages (10 turns) to be safe - roughly 1000-2000 tokens
+        history_limit = 5
+        recent_history = self.conversation_history[-history_limit:] if len(self.conversation_history) > history_limit else self.conversation_history
 
-        for msg in recent_history_wlimit:
+        for msg in recent_history:
             if msg['role'] == 'user':
                 context_parts.append(f"Student: {msg['content']}")
             elif msg['role'] == 'alex':
                 context_parts.append(f"Alex: {msg['content']}")
         context_parts.append("")
         context_parts.append("Alex:")
-        return "\n".join(context_parts)
+        
+        context = "\n".join(context_parts)
+        
+        # Safety check: Rough token estimate (4 chars ≈ 1 token)
+        estimated_tokens = len(context) // 4
+        max_input_tokens = 3500  # Leave room for output (4096 - 400 - buffer)
+        
+        if estimated_tokens > max_input_tokens:
+            print(f"WARNING: Context too large (~{estimated_tokens} tokens). Reducing history...")
+            # Reduce to last 3 messages only
+            history_limit = 3
+            context_parts = context_parts[:context_parts.index("")+1]  # Keep system prompt
+            recent_history = self.conversation_history[-history_limit:]
+            for msg in recent_history:
+                if msg['role'] == 'user':
+                    context_parts.append(f"Student: {msg['content']}")
+                elif msg['role'] == 'alex':
+                    context_parts.append(f"Alex: {msg['content']}")
+            context_parts.append("")
+            context_parts.append("Alex:")
+            context = "\n".join(context_parts)
+        
+        return context
     
     def clear_chat(self):
-        """Clear the current session and start fresh"""
+        """Clear the current conversation history"""
         self.conversation_history = []
-        if os.path.exists(self.session_file):
-            os.remove(self.session_file)
+        problem_id = self.current_problem.get('id') if self.current_problem else None
+        self.db.clear_conversation_history(problem_id)
         print("Chat cleared!")
 
     def evaluate_code(self, code, language="python"):
@@ -329,15 +435,21 @@ class CodingTutor:
         # Add the evaluation prompt to the context
         full_context = conversation_context + "\n\n" + prompt + "\n\nAlex:"
         
-        # Generate response
-        response = self.llm(
-            full_context,
-            max_tokens=800,
-            temperature=0.7,
-            top_p=0.9,
-            echo=False,
-            stop=["Student:", "User:", "Alex:", "\n\nAlex:"]
-        )
+        # Generate response with error handling
+        try:
+            response = self.llm(
+                full_context,
+                max_tokens=800,
+                temperature=0.7,
+                top_p=0.9,
+                echo=False,
+                stop=["Student:", "User:", "Alex:", "\n\nAlex:"]
+            )
+        except Exception as e:
+            print(f"ERROR during code evaluation: {str(e)}")
+            fallback = "I encountered a technical issue while evaluating your code. Could you try submitting it again? If this persists, try 'Clear Chat'."
+            self._add_message_to_history('alex', fallback)
+            return fallback
         
         # Extract and clean response
         raw_response = response['choices'][0]['text'].strip()
@@ -358,29 +470,74 @@ class CodingTutor:
         response = self._clean_response(raw_response)
         
         # Add only the response to history
-        self.conversation_history.append({
-            'role': 'alex',
-            'content': response,
-            'timestamp': datetime.now().isoformat()
-        })
+        self._add_message_to_history('alex', response)
         
-        self.save_session()
         return response
+    
+    def extract_function_signature(self, python_solution):
+        """Extract function signature from the complete solution"""
+        try:
+            lines = python_solution.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                # Look for function definition
+                if line.startswith('def ') and ':' in line:
+                    # Extract the function signature
+                    if line.endswith(':'):
+                        return line + '\n    pass'
+                    else:
+                        # Handle multi-line function definitions
+                        func_def = line
+                        # You might need to handle cases where the signature spans multiple lines
+                        return func_def + ':\n    pass'
+                        
+                # Also look for class-based solutions
+                elif line.startswith('class Solution:'):
+                    # Look for the method definition in the next few lines
+                    for i, next_line in enumerate(lines[lines.index(line):lines.index(line)+10]):
+                        if next_line.strip().startswith('def ') and ':' in next_line:
+                            method_line = next_line.strip()
+                            if method_line.endswith(':'):
+                                return f"class Solution:\n    {method_line}\n        pass"
+                            else:
+                                return f"class Solution:\n    {method_line}:\n        pass"
+            
+            # Fallback if no function found
+            return "def solution():\n    pass"
+            
+        except Exception as e:
+            print(f"Error extracting function signature: {e}")
+            return "def solution():\n    pass"
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+sock = Sock(app)
+
+# Configure CORS from environment variables
+allowed_origins = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+CORS(app, origins=allowed_origins)
+
+# Initialize database
+print("Initializing database...")
+db_path = os.getenv('DATABASE_PATH', 'data/zerotohire.db')
+db = Database(db_path)
+print(f"Database initialized at {db_path}")
 
 # Initialize the assistant (this will take a moment)
 print("Initializing AI Assistant...")
-# Using Qwen 7B model for better general tutoring capabilities
-model_path = hf_hub_download(repo_id="Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", 
-                            filename="qwen2.5-coder-7b-instruct-q4_k_m.gguf")
-tutor = CodingTutor(model_path, session_file="backend_session.json")
+
+# Get model configuration from environment
+model_repo = os.getenv('HUGGINGFACE_MODEL_REPO', 'Qwen/Qwen2.5-Coder-14B-Instruct-GGUF')
+model_filename = os.getenv('HUGGINGFACE_MODEL_FILENAME', 'qwen2.5-coder-14b-instruct-q4_k_m.gguf')
+
+model_path = hf_hub_download(repo_id=model_repo, filename=model_filename)
+tutor = CodingTutor(model_path, db)
 
 # Load your enhanced LeetCode dataset from Hugging Face
 print("Loading LeetCode dataset from Hugging Face...")
-dataset = load_dataset("viccon23/leetcode")
+dataset_name = os.getenv('LEETCODE_DATASET', 'viccon23/leetcode')
+dataset = load_dataset(dataset_name)
 
 print("Loaded, lets roll.")
 print(f"Dataset contains {len(dataset['train'])} problems")
@@ -392,13 +549,20 @@ def chat():
     """Handle chat messages from the frontend"""
     try:
         data = request.json
-        message = data.get('message', '')
         
+        # Validate input
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
+        message = data.get('message', '').strip()
         if not message:
             return jsonify({'error': 'No message provided'}), 400
+        
+        # Get optional code context
+        code_context = data.get('codeContext')  # {'code': '...', 'includeInContext': true}
 
         # Handle simple slash commands without invoking the LLM
-        lower = message.strip().lower()
+        lower = message.lower()
         if lower.startswith('/done') or lower.startswith('/complete') or lower == 'mark as complete':
             if tutor.current_problem is None:
                 # No current problem to complete
@@ -433,7 +597,12 @@ def chat():
                 'problem_changed': False
             })
         
-        response = tutor.chat(message)
+        # Pass code context if provided and enabled
+        context = None
+        if code_context and code_context.get('includeInContext', False):
+            context = code_context
+        
+        response = tutor.chat(message, code_context=context)
         
         return jsonify({
             'response': response,
@@ -442,8 +611,76 @@ def chat():
             'problem_changed': False
         })
     
+    except ValueError as e:
+        return jsonify({'error': f'Invalid input: {str(e)}'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Error in chat endpoint: {str(e)}")
+        return jsonify({'error': 'An error occurred processing your message. Please try again.'}), 500
+
+
+@sock.route('/ws/chat')
+def chat_socket(ws):
+    """WebSocket endpoint for streaming chatbot responses."""
+    while True:
+        try:
+            payload_raw = ws.receive()
+        except Exception as exc:
+            print(f"WebSocket receive error: {exc}")
+            break
+
+        if payload_raw is None:
+            break
+
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            ws.send(json.dumps({'type': 'error', 'error': 'Invalid JSON payload'}))
+            continue
+
+        message = payload.get('message', '').strip()
+        if not message:
+            ws.send(json.dumps({'type': 'error', 'error': 'No message provided'}))
+            continue
+
+        code_context_payload = payload.get('codeContext')
+        context = None
+        if code_context_payload and code_context_payload.get('includeInContext'):
+            context = code_context_payload
+
+        lower = message.lower()
+        if lower.startswith('/done') or lower.startswith('/complete') or lower == 'mark as complete':
+            if tutor.current_problem is None:
+                response_text = 'No problem is currently loaded to mark as complete.'
+            else:
+                pid = tutor.current_problem.get('id')
+                if pid is not None:
+                    tutor.mark_problem_completed(pid)
+                response_text = f"Problem '{tutor.current_problem.get('title','')}' marked as completed."
+
+            ws.send(json.dumps({
+                'type': 'final',
+                'message': response_text,
+                'conversation_history': tutor.conversation_history,
+                'current_problem': tutor.current_problem,
+                'problem_changed': False
+            }))
+            continue
+
+        for event in tutor.chat_stream(message, code_context=context):
+            if event['type'] == 'token':
+                ws.send(json.dumps({'type': 'token', 'token': event['token']}))
+            elif event['type'] == 'error':
+                ws.send(json.dumps({'type': 'error', 'error': event['error']}))
+                break
+            elif event['type'] == 'final':
+                ws.send(json.dumps({
+                    'type': 'final',
+                    'message': event['message'],
+                    'conversation_history': tutor.conversation_history,
+                    'current_problem': tutor.current_problem,
+                    'problem_changed': False
+                }))
+
 
 @app.route('/api/problems', methods=['GET'])
 def get_problems():
@@ -512,11 +749,15 @@ def select_problem(problem_id):
         
         selected_problem = dataset["train"][problem_id]
         
-        # Process problem types into an array (same as in get_problems)
+        # Process problem types into an array
         problem_types_str = selected_problem.get('problem_types', '')
         problem_types_array = []
         if problem_types_str:
             problem_types_array = [ptype.strip() for ptype in problem_types_str.split(',') if ptype.strip()]
+        
+        # Extract function signature from the python solution
+        python_solution = selected_problem.get('python', '')
+        template_code = tutor.extract_function_signature(python_solution)
         
         # Set the problem in the tutor session
         problem_data = {
@@ -525,7 +766,8 @@ def select_problem(problem_id):
             'description': selected_problem['content'],
             'problem_types': problem_types_array,
             'difficulty': selected_problem.get('difficulty', 'Unknown'),
-            'completed': tutor.is_problem_completed(problem_id)
+            'completed': tutor.is_problem_completed(problem_id),
+            'template_code': template_code
         }
         response = tutor.set_problem(problem_data)
         
@@ -623,6 +865,123 @@ def clear_session():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/problem/reset', methods=['POST'])
+def reset_problem():
+    """Reset a problem completely: clear messages, delete code, mark as incomplete"""
+    try:
+        data = request.json
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        problem_id = data.get('problem_id')
+        
+        if problem_id is None:
+            return jsonify({'error': 'Problem ID is required'}), 400
+        
+        db.reset_problem(problem_id)
+        
+        # If this is the current problem, clear the in-memory conversation history too
+        if tutor.current_problem and tutor.current_problem.get('id') == problem_id:
+            tutor.conversation_history = []
+        
+        return jsonify({'message': 'Problem reset successfully'}), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/code/save', methods=['POST'])
+def save_code():
+    """Save code snapshot for the current problem"""
+    try:
+        data = request.json
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        problem_id = data.get('problem_id')
+        code = data.get('code', '')
+        language = data.get('language', 'python')
+        
+        if problem_id is None:
+            return jsonify({'error': 'Problem ID is required'}), 400
+        
+        db.save_code(problem_id, code, language)
+        
+        return jsonify({
+            'message': 'Code saved successfully',
+            'problem_id': problem_id
+        })
+    
+    except Exception as e:
+        print(f"Error in save_code endpoint: {str(e)}")
+        return jsonify({'error': 'Failed to save code'}), 500
+
+
+@app.route('/api/code/load/<int:problem_id>', methods=['GET'])
+def load_code(problem_id):
+    """Load the latest code for a problem"""
+    try:
+        code = db.get_latest_code(problem_id)
+        
+        return jsonify({
+            'problem_id': problem_id,
+            'code': code or ''
+        })
+    
+    except Exception as e:
+        print(f"Error in load_code endpoint: {str(e)}")
+        return jsonify({'error': 'Failed to load code'}), 500
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get all user settings"""
+    try:
+        settings = db.get_all_settings()
+        return jsonify(settings)
+    
+    except Exception as e:
+        print(f"Error in get_settings endpoint: {str(e)}")
+        return jsonify({'error': 'Failed to load settings'}), 500
+
+
+@app.route('/api/settings/<setting_key>', methods=['POST'])
+def save_setting(setting_key):
+    """Save a user setting"""
+    try:
+        data = request.json
+        
+        if not data or 'value' not in data:
+            return jsonify({'error': 'Value is required'}), 400
+        
+        db.save_setting(setting_key, data['value'])
+        
+        return jsonify({
+            'message': 'Setting saved successfully',
+            'key': setting_key,
+            'value': data['value']
+        })
+    
+    except Exception as e:
+        print(f"Error in save_setting endpoint: {str(e)}")
+        return jsonify({'error': 'Failed to save setting'}), 500
+
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """Get user statistics"""
+    try:
+        stats = db.get_user_stats()
+        return jsonify(stats)
+    
+    except Exception as e:
+        print(f"Error in get_stats endpoint: {str(e)}")
+        return jsonify({'error': 'Failed to load statistics'}), 500
+
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get current session status"""
@@ -641,4 +1000,9 @@ def get_status():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, host='127.0.0.1', port=5000)
+    # Get Flask configuration from environment
+    host = os.getenv('FLASK_HOST', '127.0.0.1')
+    port = int(os.getenv('FLASK_PORT', 5000))
+    debug = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
+    
+    app.run(debug=debug, host=host, port=port)

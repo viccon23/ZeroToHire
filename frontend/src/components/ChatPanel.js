@@ -5,9 +5,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './ChatPanel.css';
 
-const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading, onMarkComplete }) => {
+const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading, onMarkComplete, includeCodeInContext, onToggleCodeContext, isStreamingResponse }) => {
   const [message, setMessage] = useState('');
   const messagesEndRef = useRef(null);
+  const showTypingIndicator = isLoading && !isStreamingResponse;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -129,7 +130,7 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading, onM
         ) : (
           conversation.map((msg, index) => renderMessage(msg, index))
         )}
-        {isLoading && (
+        {showTypingIndicator && (
           <div className="message tutor loading">
             <div className="message-header">
               <span className="message-role">🤖 Tutor</span>
@@ -147,6 +148,23 @@ const ChatPanel = ({ conversation, currentProblem, onSendMessage, isLoading, onM
       </div>
 
       <form onSubmit={handleSubmit} className="message-input-form">
+        <div className="code-context-toggle">
+          <label>
+            <input
+              type="checkbox"
+              checked={includeCodeInContext}
+              onChange={onToggleCodeContext}
+            />
+            <span className="toggle-label">
+              📋 Auto-include code in messages
+              <span className="toggle-hint">
+                {includeCodeInContext 
+                  ? "AI can see your code automatically" 
+                  : "AI won't see your code unless you use 'Get Code Review'"}
+              </span>
+            </span>
+          </label>
+        </div>
         <div className="input-container">
           <input
             type="text"
