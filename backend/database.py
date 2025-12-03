@@ -5,7 +5,6 @@ Handles persistent storage of conversations, problems, code, and settings.
 
 import sqlite3
 import os
-from datetime import datetime
 from typing import List, Dict, Optional, Any
 import json
 
