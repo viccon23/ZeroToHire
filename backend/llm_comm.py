@@ -952,11 +952,15 @@ def get_settings():
 @app.route('/api/settings/<setting_key>', methods=['POST'])
 def save_setting(setting_key):
     """Save a user setting"""
+    ALLOWED_SETTINGS = {'includeCodeInContext', 'theme', 'fontSize'}
     try:
         data = request.json
         
         if not data or 'value' not in data:
             return jsonify({'error': 'Value is required'}), 400
+        
+        if setting_key not in ALLOWED_SETTINGS:
+            return jsonify({'error': 'Invalid setting key'}), 400
         
         db.save_setting(setting_key, data['value'])
         
