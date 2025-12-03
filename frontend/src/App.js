@@ -435,7 +435,7 @@ function App() {
       
       // Clear local state
       setConversation([]);
-      setCode('# Write your solution here\n');
+      setCode(DEFAULT_TEMPLATE);
       localStorage.removeItem(getCodeStorageKey(currentProblem.id));
       setError(null);
       
