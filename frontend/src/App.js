@@ -82,7 +82,7 @@ function App() {
 
   useEffect(() => {
     hydrateCodeForProblem(currentProblem);
-  }, [currentProblem, hydrateCodeForProblem]);
+  }, [currentProblem?.id, hydrateCodeForProblem]);
 
   // Load user settings
   const loadSettings = useCallback(async () => {
