@@ -64,7 +64,7 @@ I was inspired after watching Neetcode videos and thinking of how convenient it 
 1. **WebSocket Handshake** – The React app opens `ws://<backend>/ws/chat` as soon as it mounts. Messages are serialized JSON payloads that mirror the REST body but stay on the socket.
 2. **Token Streaming** – Flask + `flask-sock` push every token emitted by `llama_cpp` down the socket. The UI stitches them into an in-progress assistant bubble while the traditional REST response shape (`conversation_history`, `current_problem`) arrives as a `final` event.
 3. **Graceful Fallbacks** – If the socket is unavailable, the UI automatically falls back to the existing `/api/chat` POST call so users never get stuck.
-4. **Local Cache First** – Every problem gets a deterministic `localStorage` key. On load we hydrate from the browser cache, then silently reconcile with the server snapshot. Each edit rewrites the cache and a debounced autosave still syncs to SQLite.
+4. **Local Cache First** – Every problem gets a deterministic `localStorage` key. On load we hydrate from the browser cache, then silently reconcile with the server snapshot. Each edit rewrites the cache and a delayed autosave (30s after the last edit) still syncs to SQLite.
 5. **Resilience** – Clearing chats or resetting problems also keeps the cache in sync, so what you see in Monaco always matches what survives a refresh.
 
 ## 🔧 Setup and Installation
