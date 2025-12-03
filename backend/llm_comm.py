@@ -495,7 +495,8 @@ class CodingTutor:
                 # Also look for class-based solutions
                 elif line.startswith('class Solution:'):
                     # Look for the method definition in the next few lines
-                    for i, next_line in enumerate(lines[lines.index(line):lines.index(line)+10]):
+                    line_idx = lines.index(line)
+                    for i, next_line in enumerate(lines[line_idx:line_idx+10]):
                         if next_line.strip().startswith('def ') and ':' in next_line:
                             method_line = next_line.strip()
                             if method_line.endswith(':'):
