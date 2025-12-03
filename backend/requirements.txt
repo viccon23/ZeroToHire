@@ -1,6 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
+
 flask==2.3.3
 flask-cors==4.0.0
-datasets==2.14.5
-huggingface_hub==0.17.3
-torch==2.0.1
-llama-cpp-python==0.2.11
+flask-sock==0.6.0
+simple-websocket==1.0.0
+datasets==4.4.1
+pyarrow>=21.0.0
+huggingface_hub==0.25.2
+llama-cpp-python==0.3.4
+python-dotenv==1.0.0
+torch==2.9.1+cu126
+torchvision==0.24.1+cu126
