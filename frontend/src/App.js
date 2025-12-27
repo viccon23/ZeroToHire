@@ -3,6 +3,7 @@ import './App.css';
 import ChatPanel from './components/ChatPanel';
 import CodeEditor from './components/CodeEditor';
 import ProblemBrowser from './components/ProblemBrowser';
+import UserProfile from './components/UserProfile';
 import api, { API_BASE_URL } from './services/api';
 
 const DEFAULT_TEMPLATE = 'def solution():\n    pass';
@@ -372,8 +373,8 @@ function App() {
     setError(null);
     try {
       await api.post(`/problems/${currentProblem.id}/completion`, { completed: true });
-      setConversation(prev => [...prev, { role: 'system', content: `Problem '${currentProblem.title}' marked as completed.`, timestamp: new Date().toISOString() }]);
-      await loadStatus();
+      setConversation(prev => [...prev, { role: 'system', content: `Problem '${currentProblem.title}' marked as completed.`, timestamp: new Date().toISOString() }]);      
+      setCurrentProblem(prev => ({ ...prev, completed: true }));
     } catch (error) {
       console.error('Failed to mark problem complete:', error);
       const errorMessage = error.response?.data?.error || 'Failed to mark problem as complete.';
@@ -442,13 +443,17 @@ function App() {
       await api.post('/problem/reset', { 
         problem_id: currentProblem.id 
       });
-      
+
+      // Mark as incomplete in backend
+      await api.post(`/problems/${currentProblem.id}/completion`, { completed: false });
+
       // Clear local state
       setConversation([]);
       setCode(DEFAULT_TEMPLATE);
       localStorage.removeItem(getCodeStorageKey(currentProblem.id));
       setError(null);
-      
+      setCurrentProblem(prev => ({ ...prev, completed: false }));
+
       alert('Problem reset successfully! Starting fresh.');
     } catch (err) {
       console.error('Failed to reset problem:', err);
@@ -470,6 +475,7 @@ function App() {
           <button onClick={resetProblem} disabled={isLoading || !currentProblem}>
             Reset Problem
           </button>
+          <UserProfile />
         </div>
       </header>
       

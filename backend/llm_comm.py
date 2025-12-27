@@ -7,24 +7,27 @@ import torch
 from llama_cpp import Llama
 import json
 import os
+from typing import Optional
 from datetime import datetime
 import re
 from dotenv import load_dotenv
 from database import Database
+from auth import AuthManager, token_required, optional_token, validate_password, validate_email, validate_username
 
 # Load environment variables
 load_dotenv()
 
 class CodingTutor:
-    def __init__(self, model_path, db: Database):
+    def __init__(self, model_path, db: Database, user_id: Optional[int] = None):
         """Initialize the coding tutor with database storage."""
         self.db = db
+        self.user_id = user_id
         
         # Load conversation history from database (LIMIT to recent messages only to prevent context overflow)
-        self.conversation_history = self.db.get_conversation_history(limit=10)
+        self.conversation_history = self.db.get_conversation_history(limit=10, user_id=user_id)
         
         # Load current problem from database
-        self.current_problem = self.db.get_current_problem()
+        self.current_problem = self.db.get_current_problem(user_id=user_id)
         
         print(f"Loaded session with {len(self.conversation_history)} recent messages")
         
@@ -53,6 +56,12 @@ class CodingTutor:
         )
         print("Model loaded successfully!")
     
+    def set_user_context(self, user_id: Optional[int] = None):
+        """Set the current user context and reload user-specific data."""
+        self.user_id = user_id
+        self.conversation_history = self.db.get_conversation_history(limit=10, user_id=user_id)
+        self.current_problem = self.db.get_current_problem(user_id=user_id)
+    
     def _add_message_to_history(self, role: str, content: str):
         """Add message to history and save to database."""
         message = {
@@ -64,7 +73,7 @@ class CodingTutor:
         
         # Save to database
         problem_id = self.current_problem.get('id') if self.current_problem else None
-        self.db.save_message(role, content, problem_id)
+        self.db.save_message(role, content, problem_id, user_id=self.user_id)
     
     def set_problem(self, problem_data):
         """Set a new coding problem"""
@@ -80,7 +89,8 @@ class CodingTutor:
         self.db.set_problem(
             self.current_problem['id'],
             self.current_problem['title'],
-            self.current_problem['difficulty']
+            self.current_problem['difficulty'],
+            user_id=self.user_id
         )
         
         # Add system message about the new problem
@@ -105,17 +115,17 @@ class CodingTutor:
     
     def mark_problem_completed(self, problem_id):
         """Mark a problem as completed in database."""
-        self.db.mark_problem_complete(problem_id)
+        self.db.mark_problem_complete(problem_id, user_id=self.user_id)
         return True
 
     def mark_problem_uncompleted(self, problem_id):
         """Mark a problem as incomplete in database."""
-        self.db.mark_problem_incomplete(problem_id)
+        self.db.mark_problem_incomplete(problem_id, user_id=self.user_id)
         return True
     
     def is_problem_completed(self, problem_id):
         """Check if problem is completed."""
-        return self.db.is_problem_completed(problem_id)
+        return self.db.is_problem_completed(problem_id, user_id=self.user_id)
     
     def chat(self, user_message, is_initial=False, code_context=None):
         """Continue the conversation with Alex
@@ -546,9 +556,14 @@ print(f"Dataset contains {len(dataset['train'])} problems")
 print("Backend ready!")
 
 @app.route('/api/chat', methods=['POST'])
-def chat():
+@optional_token
+def chat(current_user=None):
     """Handle chat messages from the frontend"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
+        
         data = request.json
         
         # Validate input
@@ -684,9 +699,13 @@ def chat_socket(ws):
 
 
 @app.route('/api/problems', methods=['GET'])
-def get_problems():
+@optional_token
+def get_problems(current_user=None):
     """Get all problems with optional filtering and pagination"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
         # Get query parameters for filtering
         difficulty_filters = request.args.getlist('difficulty')  # Can have multiple
         type_filters = request.args.getlist('type')              # Can have multiple
@@ -742,9 +761,13 @@ def get_problems():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/problems/<int:problem_id>', methods=['POST'])
-def select_problem(problem_id):
+@optional_token
+def select_problem(problem_id, current_user=None):
     """Select a specific problem by ID"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
         if problem_id < 0 or problem_id >= len(dataset["train"]):
             return jsonify({'error': 'Invalid problem ID'}), 400
         
@@ -783,9 +806,14 @@ def select_problem(problem_id):
         return jsonify({'error': str(e)}), 500
     
 @app.route('/api/problems/<int:problem_id>/completion', methods=['POST'])
-def toggle_problem_completion(problem_id):
-
+@optional_token
+def toggle_problem_completion(problem_id, current_user=None):
+    """Toggle problem completion status"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
+        
         if problem_id < 0 or problem_id >= len(dataset["train"]):
             return jsonify({'error': 'Invalid problem ID'}), 400
         data = request.json
@@ -857,9 +885,14 @@ def evaluate_code():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/clear-chat', methods=['POST'])
-def clear_session():
+@optional_token
+def clear_session(current_user=None):
     """Clear the current chat"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
+        
         tutor.clear_chat()
         return jsonify({'message': 'Session cleared successfully'})
     
@@ -868,9 +901,14 @@ def clear_session():
 
 
 @app.route('/api/problem/reset', methods=['POST'])
-def reset_problem():
+@optional_token
+def reset_problem(current_user=None):
     """Reset a problem completely: clear messages, delete code, mark as incomplete"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        tutor.set_user_context(user_id)
+        
         data = request.json
         
         if not data:
@@ -881,7 +919,7 @@ def reset_problem():
         if problem_id is None:
             return jsonify({'error': 'Problem ID is required'}), 400
         
-        db.reset_problem(problem_id)
+        db.reset_problem(problem_id, user_id=user_id)
         
         # If this is the current problem, clear the in-memory conversation history too
         if tutor.current_problem and tutor.current_problem.get('id') == problem_id:
@@ -894,9 +932,13 @@ def reset_problem():
 
 
 @app.route('/api/code/save', methods=['POST'])
-def save_code():
+@optional_token
+def save_code(current_user=None):
     """Save code snapshot for the current problem"""
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        
         data = request.json
         
         if not data:
@@ -909,7 +951,7 @@ def save_code():
         if problem_id is None:
             return jsonify({'error': 'Problem ID is required'}), 400
         
-        db.save_code(problem_id, code, language)
+        db.save_code(problem_id, code, language, user_id=user_id)
         
         return jsonify({
             'message': 'Code saved successfully',
@@ -922,10 +964,14 @@ def save_code():
 
 
 @app.route('/api/code/load/<int:problem_id>', methods=['GET'])
-def load_code(problem_id):
+@optional_token
+def load_code(problem_id, current_user=None):
     """Load the latest code for a problem"""
     try:
-        code = db.get_latest_code(problem_id)
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        
+        code = db.get_latest_code(problem_id, user_id=user_id)
         
         return jsonify({
             'problem_id': problem_id,
@@ -938,10 +984,14 @@ def load_code(problem_id):
 
 
 @app.route('/api/settings', methods=['GET'])
-def get_settings():
+@optional_token
+def get_settings(current_user=None):
     """Get all user settings"""
     try:
-        settings = db.get_all_settings()
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        
+        settings = db.get_all_settings(user_id=user_id)
         return jsonify(settings)
     
     except Exception as e:
@@ -950,19 +1000,20 @@ def get_settings():
 
 
 @app.route('/api/settings/<setting_key>', methods=['POST'])
-def save_setting(setting_key):
+@optional_token
+def save_setting(setting_key, current_user=None):
     """Save a user setting"""
     ALLOWED_SETTINGS = {'includeCodeInContext', 'theme', 'fontSize'}
     try:
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        
         data = request.json
         
         if not data or 'value' not in data:
             return jsonify({'error': 'Value is required'}), 400
         
-        if setting_key not in ALLOWED_SETTINGS:
-            return jsonify({'error': 'Invalid setting key'}), 400
-        
-        db.save_setting(setting_key, data['value'])
+        db.save_setting(setting_key, data['value'], user_id=user_id)
         
         return jsonify({
             'message': 'Setting saved successfully',
@@ -976,10 +1027,14 @@ def save_setting(setting_key):
 
 
 @app.route('/api/stats', methods=['GET'])
-def get_stats():
+@optional_token
+def get_stats(current_user=None):
     """Get user statistics"""
     try:
-        stats = db.get_user_stats()
+        # Set user context if authenticated
+        user_id = current_user['user_id'] if current_user else None
+        
+        stats = db.get_user_stats(user_id=user_id)
         return jsonify(stats)
     
     except Exception as e:
@@ -988,8 +1043,13 @@ def get_stats():
 
 
 @app.route('/api/status', methods=['GET'])
-def get_status():
+@optional_token
+def get_status(current_user=None):
     """Get current session status"""
+    # Set user context if authenticated
+    user_id = current_user['user_id'] if current_user else None
+    tutor.set_user_context(user_id)
+    
     current = tutor.current_problem
     # Attach completion flag if there's a current problem
     if current is not None:
@@ -1003,6 +1063,312 @@ def get_status():
         'conversation_history': tutor.conversation_history,
         'message_count': len(tutor.conversation_history)
     })
+
+
+# ==================== Authentication Routes ====================
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Register a new user"""
+    try:
+        data = request.json
+        username = data.get('username', '').strip()
+        email = data.get('email', '').strip()
+        password = data.get('password', '')
+        
+        # Validate input
+        if not username or not email or not password:
+            return jsonify({'error': 'Username, email, and password are required'}), 400
+        
+        # Validate username
+        valid_username, username_error = validate_username(username)
+        if not valid_username:
+            return jsonify({'error': username_error}), 400
+        
+        # Validate email
+        if not validate_email(email):
+            return jsonify({'error': 'Invalid email format'}), 400
+        
+        # Validate password
+        valid_password, password_error = validate_password(password)
+        if not valid_password:
+            return jsonify({'error': password_error}), 400
+        
+        # Check if user already exists
+        if db.get_user_by_username(username):
+            return jsonify({'error': 'Username already exists'}), 409
+        
+        if db.get_user_by_email(email):
+            return jsonify({'error': 'Email already exists'}), 409
+        
+        # Hash password and create user
+        password_hash = AuthManager.hash_password(password)
+        user_id = db.create_user(username, email, password_hash)
+        
+        if not user_id:
+            return jsonify({'error': 'Failed to create user'}), 500
+        
+        # Generate tokens
+        access_token = AuthManager.create_access_token(user_id, username)
+        refresh_token = AuthManager.create_refresh_token(user_id, username)
+        
+        return jsonify({
+            'message': 'User registered successfully',
+            'user': {
+                'id': user_id,
+                'username': username,
+                'email': email
+            },
+            'access_token': access_token,
+            'refresh_token': refresh_token
+        }), 201
+        
+    except Exception as e:
+        print(f"Error in register: {e}")
+        return jsonify({'error': 'Registration failed'}), 500
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Login user"""
+    try:
+        data = request.json
+        username_or_email = data.get('username', '').strip()
+        password = data.get('password', '')
+        
+        if not username_or_email or not password:
+            return jsonify({'error': 'Username/email and password are required'}), 400
+        
+        # Try to find user by username or email
+        user = db.get_user_by_username(username_or_email)
+        if not user:
+            user = db.get_user_by_email(username_or_email)
+        
+        if not user:
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Check if account is active
+        if not user['is_active']:
+            return jsonify({'error': 'Account is disabled'}), 403
+        
+        # Verify password
+        if not AuthManager.verify_password(password, user['password_hash']):
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Update last login
+        db.update_user_last_login(user['id'])
+        
+        # Generate tokens
+        access_token = AuthManager.create_access_token(user['id'], user['username'])
+        refresh_token = AuthManager.create_refresh_token(user['id'], user['username'])
+        
+        return jsonify({
+            'message': 'Login successful',
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'email': user['email'],
+                'created_at': user['created_at']
+            },
+            'access_token': access_token,
+            'refresh_token': refresh_token
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in login: {e}")
+        return jsonify({'error': 'Login failed'}), 500
+
+
+@app.route('/api/auth/refresh', methods=['POST'])
+def refresh_token():
+    """Refresh access token using refresh token"""
+    try:
+        data = request.json
+        refresh_token = data.get('refresh_token')
+        
+        if not refresh_token:
+            return jsonify({'error': 'Refresh token is required'}), 400
+        
+        # Verify refresh token
+        payload = AuthManager.verify_token(refresh_token, 'refresh')
+        
+        if not payload:
+            return jsonify({'error': 'Invalid or expired refresh token'}), 401
+        
+        # Generate new access token
+        access_token = AuthManager.create_access_token(
+            payload['user_id'],
+            payload['username']
+        )
+        
+        return jsonify({
+            'access_token': access_token
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in refresh_token: {e}")
+        return jsonify({'error': 'Token refresh failed'}), 500
+
+
+@app.route('/api/auth/profile', methods=['GET'])
+@token_required
+def get_profile(current_user):
+    """Get user profile"""
+    try:
+        user = db.get_user_by_id(current_user['user_id'])
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Get user statistics
+        stats = db.get_user_stats(user_id=user['id'])
+        
+        return jsonify({
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'email': user['email'],
+                'created_at': user['created_at'],
+                'last_login': user['last_login']
+            },
+            'stats': stats
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in get_profile: {e}")
+        return jsonify({'error': 'Failed to get profile'}), 500
+
+
+@app.route('/api/auth/profile', methods=['PUT'])
+@token_required
+def update_profile(current_user):
+    """Update user profile"""
+    try:
+        data = request.json
+        new_username = data.get('username', '').strip()
+        new_email = data.get('email', '').strip()
+        
+        # Validate inputs if provided
+        if new_username:
+            valid_username, username_error = validate_username(new_username)
+            if not valid_username:
+                return jsonify({'error': username_error}), 400
+        
+        if new_email:
+            if not validate_email(new_email):
+                return jsonify({'error': 'Invalid email format'}), 400
+        
+        # Update profile
+        success = db.update_user_profile(
+            current_user['user_id'],
+            username=new_username if new_username else None,
+            email=new_email if new_email else None
+        )
+        
+        if not success:
+            return jsonify({'error': 'Username or email already exists'}), 409
+        
+        # Get updated user
+        user = db.get_user_by_id(current_user['user_id'])
+        
+        return jsonify({
+            'message': 'Profile updated successfully',
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'email': user['email']
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in update_profile: {e}")
+        return jsonify({'error': 'Failed to update profile'}), 500
+
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@token_required
+def change_password(current_user):
+    """Change user password"""
+    try:
+        data = request.json
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        
+        if not current_password or not new_password:
+            return jsonify({'error': 'Current and new password are required'}), 400
+        
+        # Get user
+        user = db.get_user_by_id(current_user['user_id'])
+        full_user = db.get_user_by_username(user['username'])
+        
+        if not full_user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Verify current password
+        if not AuthManager.verify_password(current_password, full_user['password_hash']):
+            return jsonify({'error': 'Current password is incorrect'}), 401
+        
+        # Validate new password
+        valid_password, password_error = validate_password(new_password)
+        if not valid_password:
+            return jsonify({'error': password_error}), 400
+        
+        # Hash and update password
+        new_password_hash = AuthManager.hash_password(new_password)
+        db.update_user_password(current_user['user_id'], new_password_hash)
+        
+        return jsonify({
+            'message': 'Password changed successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in change_password: {e}")
+        return jsonify({'error': 'Failed to change password'}), 500
+
+
+@app.route('/api/auth/delete-account', methods=['DELETE'])
+@token_required
+def delete_account(current_user):
+    """Delete user account"""
+    try:
+        data = request.json
+        password = data.get('password', '')
+        
+        if not password:
+            return jsonify({'error': 'Password confirmation is required'}), 400
+        
+        # Get user
+        user = db.get_user_by_username(current_user['username'])
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Verify password
+        if not AuthManager.verify_password(password, user['password_hash']):
+            return jsonify({'error': 'Invalid password'}), 401
+        
+        # Delete user (cascades to all related data)
+        db.delete_user(current_user['user_id'])
+        
+        return jsonify({
+            'message': 'Account deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in delete_account: {e}")
+        return jsonify({'error': 'Failed to delete account'}), 500
+
+@app.route('/api/test/gpu', methods=['GET'])
+def test_gpu():
+    import torch
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    x = torch.rand(1000, 1000).to(device)
+    y = torch.mm(x, x)
+    return {
+        "cuda_available": torch.cuda.is_available(),
+        "device_used": str(device),
+        "result_sum": y.sum().item()
+    }
 
 if __name__ == '__main__':
     # Get Flask configuration from environment

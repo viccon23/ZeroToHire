@@ -7,7 +7,9 @@ simple-websocket==1.0.0
 datasets==4.4.1
 pyarrow>=21.0.0
 huggingface_hub==0.25.2
-llama-cpp-python==0.3.4
+llama-cpp-python==0.3.16
 python-dotenv==1.0.0
 torch==2.9.1+cu126
 torchvision==0.24.1+cu126
+pyjwt==2.9.0
+bcrypt==4.2.1
