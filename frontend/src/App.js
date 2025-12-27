@@ -40,6 +40,7 @@ function App() {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const isUnmountedRef = useRef(false);
+  const messageHandlerRef = useRef(null);
 
   
 
@@ -203,6 +204,11 @@ function App() {
     }
   }, []);
 
+  // Update the ref whenever the handler changes
+  useEffect(() => {
+    messageHandlerRef.current = handleWebSocketMessage;
+  }, [handleWebSocketMessage]);
+
   const connectWebSocket = useCallback(() => {
     if (typeof window === 'undefined' || !('WebSocket' in window)) {
       return;
@@ -220,7 +226,11 @@ function App() {
         setIsWebSocketReady(true);
       };
 
-      socket.onmessage = handleWebSocketMessage;
+      socket.onmessage = (event) => {
+        if (messageHandlerRef.current) {
+          messageHandlerRef.current(event);
+        }
+      };
 
       socket.onerror = (event) => {
         console.error('WebSocket error:', event);
@@ -238,7 +248,7 @@ function App() {
     } catch (err) {
       console.error('Failed to establish WebSocket connection:', err);
     }
-  }, [handleWebSocketMessage]);
+  }, []);
 
   useEffect(() => {
     connectWebSocket();
